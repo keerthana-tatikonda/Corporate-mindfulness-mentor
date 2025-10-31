@@ -1,0 +1,12 @@
+streamlit==1.39.0
+langgraph>=0.2.5
+matplotlib==3.9.2
+pydantic==2.8.2
+pytest==8.3.3
+pandas==2.2.3
+openai==1.48.0
+python-dotenv==1.0.1
+# Testing dependencies
+pytest>=7.4.0
+pytest-cov>=4.1.0
+pytest-mock>=3.12.0
