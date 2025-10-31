@@ -1,0 +1,38 @@
+# --- Python ---
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+*.egg
+.env
+.venv/
+venv/
+ENV/
+build/
+dist/
+
+# --- IDE / Editors ---
+.vscode/
+.idea/
+*.swp
+
+# --- Streamlit cache ---
+.streamlit/
+
+# --- Test & coverage ---
+.pytest_cache/
+.coverage
+htmlcov/
+
+# --- OS files ---
+.DS_Store
+Thumbs.db
+
+# --- Logs ---
+logs/
+*.log
+
+# --- JSON data ---
+data/break_log.json
+data/*.json
