@@ -1,7 +1,7 @@
 # corporate-mindfulness-mentor
 <<<<<<< HEAD
 Team mates : 
-Samita
+Samitha
 Keerthana
 Yogitha
 Praneeth
