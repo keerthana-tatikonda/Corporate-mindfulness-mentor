@@ -14,6 +14,8 @@ from graph.break_graph import run_break_workflow
 from graph.break_graph import run_llm_break_workflow
 from graph.schemas import CheckIn
 from graph.graph import run_morning_checkin
+from services.session import init_session, start_session, stop_session, next_step, get_state
+from services.langgraph_agent import run_mentor_cycle
 
 
 
@@ -542,6 +544,100 @@ if do_checkin:
 
     if adj.risk_flags:
         st.caption("Flags: " + ", ".join(adj.risk_flags))
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 🌬 Guided Meditations, Breathing & Body Scans (User Story 4)
+# ──────────────────────────────────────────────────────────────────────────────
+st.markdown("---")
+st.markdown("## 🌬 Guided Meditations & Breathing Exercises")
+
+
+
+
+init_session()
+
+st.markdown("### 🧭 Personalize Your Session")
+user_goal = st.text_input("Describe your current state or need:", "")
+stress_level = st.slider("Stress Level", 0, 10, 0)
+
+# 🚀 Ensure user enters a goal before generating techniques
+if user_goal.strip() == "":
+    st.warning("Please describe your current state or need before continuing.")
+else:
+    if st.button("💡 Get AI-Recommended Techniques"):
+        with st.spinner("Analyzing your needs..."):
+            result = run_mentor_cycle(
+                user_goal=user_goal,
+                stress_level=stress_level,
+                profile={"context": "corporate", "session_type": "guided_practice"},
+                history=st.session_state.get("session_history", []),
+            )
+
+            # 🧩 Ensure JSON is parsed
+            if isinstance(result, str):
+                import json
+                try:
+                    result = json.loads(result)
+                except Exception as e:
+                    st.error(f"⚠️ Could not parse AI response: {e}")
+                    st.stop()
+
+            # ✅ Store and display
+            st.session_state["techniques"] = result.get("techniques", [])
+            st.session_state["summary"] = result.get("summary", "Stay mindful and consistent!")
+
+            if st.session_state["techniques"]:
+                st.success("✨ Here are your personalized AI mindfulness techniques:")
+                for technique in st.session_state["techniques"]:
+                    st.markdown(f"### 🧘 {technique['title']} · _{technique['duration_min']} min_")
+                    st.write(technique["description"])
+                    for step in technique["steps"]:
+                        st.markdown(f"- {step}")
+                st.markdown(f"---\n**Reflection:** {st.session_state['summary']}")
+            else:
+                st.warning("⚠️ No AI-generated techniques received. Try again or check your API key.")
+
+
+
+
+if "recommended_ids" in st.session_state and st.session_state["recommended_ids"]:
+    st.markdown("### ✨ AI Recommendations")
+    if st.session_state.get("summary"):
+        st.caption("AI reasoning: " + st.session_state["summary"])
+
+    for rid in st.session_state["recommended_ids"]:
+        item = find_item(lib, rid)
+        if not item:
+            continue
+        with st.container(border=True):
+            st.markdown(f"**{item.title}** · _{item.duration_min} min_")
+            st.write(item.description)
+            st.caption(", ".join(item.tags))
+            if st.button(f"▶ Start {item.title}", key=f"start_{rid}"):
+                start_session(rid)
+                st.rerun()
+
+# Active session view
+s = get_state()
+if s["running"]:
+    item = find_item(lib, s["active_item_id"])
+    if item:
+        step_idx = s["step_index"]
+        step_idx = min(step_idx, len(item.steps) - 1)
+        st.progress(step_idx / len(item.steps))
+        st.markdown(f"**Step {step_idx + 1} of {len(item.steps)}**")
+        st.info(item.steps[step_idx])
+        c1, c2 = st.columns(2)
+        with c1:
+            if st.button("⏭ Next"):
+                next_step(); st.rerun()
+        with c2:
+            if st.button("⏹ End"):
+                stop_session(); st.success("Session completed!")
+else:
+    st.caption("🧘 Select or start a technique to begin.")
+
 
 
 

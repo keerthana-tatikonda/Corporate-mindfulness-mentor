@@ -391,5 +391,15 @@
     ],
     "ai_summary": "This personalized plan includes focused breathing exercises to quickly reduce immediate stress levels, engaging with nature to enhance relaxation during breaks, and mindful journaling to process daily experiences and cultivate gratitude.",
     "saved_at": 1762015139
+  },
+  {
+    "goal": "reduce daily stress",
+    "suggested_activities": [
+      "Guided Nature Walk: Spend an hour each week in a nearby park or green space, using a guided mindfulness app to focus on the sights, sounds, and sensations of nature.",
+      "Weekly Reflection Journal: Dedicate 15 minutes at the end of each week to reflect on your experiences. Write down three stressful moments and how you responded, then note alternative mindful responses for future reference.",
+      "Mindful Breathing Breaks: Set aside 5 minutes every workday for a structured breathing exercise using an app that provides timed intervals for inhalation and exhalation."
+    ],
+    "ai_summary": "This personalized plan focuses on weekly activities designed to help you reduce daily stress through immersion in nature, reflection on personal experiences, and consistent breathing practices.",
+    "saved_at": 1762035179
   }
 ]
