@@ -35,48 +35,37 @@ The **Goal Creation feature** now runs smoothly and provides meaningful, structu
 Future work will focus on enhancing the goal decomposition logic and improving user experience.
 
 
-Iteration 1 Summary — User Story 2
-Mindful Break Notification – Iteration 1 Update
-Completed Stories
+### Iteration 1 Summary — User Story 2
+
+### Completed Stories:
 
 Implemented the Mindful Break Notification feature that reminds corporate employees to take short mental breaks during long work hours.
-
 Built a Streamlit-based interface where users can start a work session, view their next scheduled break, and receive motivational mindfulness messages.
-
 Integrated a Python scheduler and LangGraph logic to automatically calculate and log the next scheduled break time every two hours.
-
 Added JSON-based storage (data/break_log.json) to persist break data and display only the latest scheduled reminder on the UI.
 
-Created and executed automated test scenarios (test_scenarios.json) covering:
+### Created and executed automated test scenarios (test_scenarios.json) covering:
 
 Single Break Trigger
-
 Multiple Breaks Logging
-
 File Persistence after restart
 
- Deferred or Unfinished Stories
+ ### Deferred or Unfinished Stories:
 
 Planned enhancement to add email/Slack notifications for users who are away from the app interface.
-
 Upcoming Stress Tracking Dashboard integration to visualize daily mindfulness activity and stress levels.
 
-Technical or Coordination Challenges
+### Technical or Coordination Challenges:
 
 Encountered Streamlit refresh and button-state issues, which were resolved by managing session states.
-
 Faced JSON concurrency and overwriting issues during multi-user testing; implemented safer read/write logic.
-
 Managed virtual environment dependencies (streamlit, schedule, python-dotenv) to ensure compatibility with other teammate modules.
 
- How the Prototype Works 
+### How the Prototype Works:-
  
 The user enters their name and selects work duration in Streamlit.
-
 The system automatically calculates the next break time (2 hours ahead).
-
 Clicking “Run Break Agent” logs the scheduled break, displays a motivational message, and stores it in break_log.json.
-
 The interface shows only the most recent reminder while retaining all logs in JSON for analysi
 
 
