@@ -361,5 +361,35 @@
     ],
     "ai_summary": "This personalized plan includes activities that specifically target improving sleep through relaxation techniques and self-reflection. The guided meditation focuses on calming the mind, while progressive muscle relaxation helps release physical tension. The sleep journal promotes awareness of patterns affecting your rest.",
     "saved_at": 1761880090
+  },
+  {
+    "goal": "reduce daily stress",
+    "suggested_activities": [
+      "Attend a weekly guided meditation session focused on stress reduction using body scan techniques to promote relaxation.",
+      "Engage in a 30-minute outdoor mindfulness walk each week, concentrating on the sensations of nature and your breath to ground yourself.",
+      "Participate in a weekly yoga class that includes restorative poses specifically aimed at releasing tension and calming the mind."
+    ],
+    "ai_summary": "This personalized plan focuses on structured activities designed to help you systematically reduce daily stress through mindfulness practices. The combination of guided meditation, nature exposure, and restorative yoga will support your goal of managing stress effectively each week.",
+    "saved_at": 1762014298
+  },
+  {
+    "goal": "reduce daily stress",
+    "suggested_activities": [
+      "Weekly Guided Nature Walk: Spend one hour walking in a local park or natural area, focusing on the sights, sounds, and smells of nature. Use all five senses to enhance your mindfulness experience.",
+      "Mindful Journaling Session: Dedicate 30 minutes each week to write down your thoughts and feelings about stressors. Focus on identifying triggers and developing strategies for coping with them mindfully.",
+      "Breath-Focused Meditation Break: Set aside 15 minutes once a week to practice breath-focused meditation. Find a quiet space, close your eyes, and concentrate solely on your breath. Count each inhalation and exhalation up to ten before starting over."
+    ],
+    "ai_summary": "This personalized plan emphasizes activities that promote relaxation through nature immersion, self-reflection, and breath awareness\u2014specifically designed to help you reduce daily stress effectively.",
+    "saved_at": 1762014851
+  },
+  {
+    "goal": "reduce daily stress",
+    "suggested_activities": [
+      "5-Minute Breathing Exercise: Set a timer for 5 minutes. Sit comfortably, close your eyes, and focus solely on your breath. Inhale deeply through your nose, hold for a few seconds, and exhale slowly through your mouth. Repeat this cycle while letting go of any distractions.",
+      "Nature Walk Mindfulness: Take a 15-minute walk during your lunch break in a nearby park or green space. Focus on the sounds, smells, and sights around you as you walk. Try to be fully present with each step, noticing how nature impacts your mood.",
+      "Mindful Journaling: Spend 10 minutes at the end of your day writing down three things that stressed you and three things you're grateful for today. Reflecting on both aspects can help balance out stress with positivity."
+    ],
+    "ai_summary": "This personalized plan includes focused breathing exercises to quickly reduce immediate stress levels, engaging with nature to enhance relaxation during breaks, and mindful journaling to process daily experiences and cultivate gratitude.",
+    "saved_at": 1762015139
   }
 ]

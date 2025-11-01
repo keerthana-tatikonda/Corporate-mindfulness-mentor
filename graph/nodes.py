@@ -2,11 +2,38 @@
 from typing import List, Dict, Any, Tuple, Optional
 import json
 import re
+import hashlib, random
+
 from services.llm import client, MODEL
 from .schemas import Goal, PlanResponse, SubGoal, DecomposedPlan
 from datetime import datetime
 import random
 import hashlib
+from .schemas import DayAdjustment
+from services.llm import client, MODEL
+
+from pydantic import ValidationError
+import logging
+
+log = logging.getLogger(__name__)
+
+def _to_list(value):
+    """Coerce arbitrary JSON-ish values into List[str]."""
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return [str(x).strip() for x in value if str(x).strip()]
+    if isinstance(value, str):
+        # accept comma or newline separated text
+        parts = [p.strip() for p in value.replace("\r", "").split("\n")]
+        flat = []
+        for p in parts:
+            flat += [q.strip() for q in p.split(",")]
+        return [x for x in flat if x]
+    # fallback: single value -> one-item list
+    return [str(value).strip()] if str(value).strip() else []
+
+
 
 # --- Constants ---
 TIME_UNITS: Dict[str, str] = {
@@ -544,3 +571,312 @@ ID: {unique_seed}
         duration_type=goal.duration_type,
         ai_summary=ai_summary,
     )
+
+# --- Morning Check-In Node (additive) ---
+# --- Morning Check-In Node (robust & personalized fallback) ---
+# # --- Morning Check-In (helpers + node) ---
+import os
+import json
+import logging
+import hashlib
+import random
+from typing import Dict, Any, List
+from pydantic import ValidationError
+
+from services.llm import client, MODEL
+from .schemas import DayAdjustment
+
+log = logging.getLogger(__name__)
+
+CHECKIN_SYS_PROMPT = (
+    "You are a corporate mindfulness mentor. Given a user's morning check-in, "
+    "summarize their state, flag risks, and suggest 3-5 concrete, brief actions for today. "
+    "Actions must be short, feasible at work, and tied to stress management (breathwork, micro-breaks, reframing). "
+    "Reply in strict JSON with keys: summary (str), focus_for_today (list[str]), risk_flags (list[str])."
+)
+
+def _to_list(value):
+    """Coerce arbitrary JSON-ish values into List[str]."""
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return [str(x).strip() for x in value if str(x).strip()]
+    if isinstance(value, str):
+        parts = [p.strip() for p in value.replace("\r", "").split("\n")]
+        flat: List[str] = []
+        for p in parts:
+            flat += [q.strip() for q in p.split(",")]
+        return [x for x in flat if x]
+    s = str(value).strip()
+    return [s] if s else []
+
+def _rule_based_fallback(ck: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Deterministic, input-sensitive fallback:
+    - Seed from (mood, sleep, energy, workload) so ANY change alters the selection.
+    - Pick different micro-actions from per-factor pools.
+    - Ensure 3–5 total items and at least one per provided field.
+    """
+    mood = (ck.get("mood") or "").lower().strip()
+    sleep = (ck.get("sleep_quality") or "").lower().strip()
+    energy = (ck.get("energy") or "").lower().strip()
+    workload = (ck.get("workload") or "").lower().strip()
+    notes = (ck.get("notes") or "").strip()
+
+    seed_str = f"{mood}|{sleep}|{energy}|{workload}"
+    seed = int(hashlib.sha1(seed_str.encode("utf-8")).hexdigest(), 16)
+    rng = random.Random(seed)
+
+    mood_pool = {
+        "calm": [
+            "1-min grounding before first meeting",
+            "gratitude note at lunch",
+            "slow nasal breathing for 2 min mid-morning",
+        ],
+        "neutral": [
+            "3 mindful breaths before each call",
+            "2-min posture reset hourly",
+            "note 1 intention for the afternoon",
+        ],
+        "anxious": [
+            "2-min box breathing before hard tasks",
+            "3-min cognitive reframe (worry → counter-fact)",
+            "progressive muscle relax for 2 min at desk",
+        ],
+        "frustrated": [
+            "4-7-8 breath before sending emails",
+            "2-min walk to reset after blockers",
+            "write-and-hold draft for 5 min before sending",
+        ],
+    }
+    sleep_pool = {
+        "poor": [
+            "4-7-8 breathing before first meeting",
+            "10-min earlier wind-down tonight",
+            "skip caffeine after 2pm",
+        ],
+        "ok": [
+            "1-min mindful breath before lunch",
+            "light stretch mid-afternoon",
+            "screen break: 20-20-20 twice today",
+        ],
+        "great": [
+            "10-min deep work sprint early morning",
+            "2-min energizer breath (in fast, out slow)",
+            "share one quick win with teammate",
+        ],
+    }
+    energy_pool = {
+        "low": [
+            "5-min brisk walk at lunch",
+            "water + light snack mid-afternoon",
+            "sunlight break for 3 min",
+        ],
+        "medium": [
+            "2×45-min focus sprints (timer on)",
+            "micro-stretch every hour",
+            "check in with posture at 3pm",
+        ],
+        "high": [
+            "tackle the hardest task first",
+            "mentor a teammate for 10 min",
+            "end-of-day reflect on 1 learning",
+        ],
+    }
+    workload_pool = {
+        "light": [
+            "batch messages twice today",
+            "finish one small backlog item",
+            "organize tomorrow's top 3",
+        ],
+        "normal": [
+            "plan 3 priority tasks (timeboxed)",
+            "schedule 3-min break after each block",
+            "say no to 1 low-impact ask",
+        ],
+        "heavy": [
+            "90-min deep focus (no notifications)",
+            "break tasks into 25-min pomodoros",
+            "delegate or defer 1 item",
+        ],
+    }
+
+    def pick_from(pool_map, key, k=1):
+        if not key or key not in pool_map:
+            return []
+        items = pool_map[key][:]
+        rng.shuffle(items)
+        return items[:k]
+
+    actions: List[str] = []
+    flags: List[str] = []
+
+    actions += pick_from(mood_pool, mood, 1)
+    actions += pick_from(sleep_pool, sleep, 1)
+    actions += pick_from(energy_pool, energy, 1)
+    actions += pick_from(workload_pool, workload, 1)
+
+    if sleep == "poor":
+        flags.append("poor sleep")
+    if mood in {"anxious", "frustrated"}:
+        flags.append("elevated stress")
+    if energy == "low":
+        flags.append("low energy")
+    if workload == "heavy":
+        flags.append("heavy workload")
+
+    candidate_pool = (
+        mood_pool.get(mood, []) +
+        sleep_pool.get(sleep, []) +
+        energy_pool.get(energy, []) +
+        workload_pool.get(workload, [])
+    )
+    seen = set()
+    dedup: List[str] = []
+    for a in actions + candidate_pool:
+        key = a.lower()
+        if key not in seen:
+            seen.add(key)
+            dedup.append(a)
+
+    target_min, target_max = 3, 5
+    while len(dedup) < target_min and candidate_pool:
+        rng.shuffle(candidate_pool)
+        cand = candidate_pool.pop(0)
+        if cand.lower() not in seen:
+            seen.add(cand.lower())
+            dedup.append(cand)
+    dedup = dedup[:target_max]
+
+    summary_bits: List[str] = []
+    if flags:
+        summary_bits.append(" • ".join(flags))
+    if notes:
+        summary_bits.append(f"note: {notes[:80]}")
+    summary = "Plan tuned for today" + (f" ({'; '.join(summary_bits)})" if summary_bits else ".")
+
+    return {
+        "summary": summary,
+        "focus_for_today": dedup,
+        "risk_flags": flags
+    }
+
+def morning_checkin_node(state: Dict[str, Any]) -> Dict[str, Any]:
+    ck = state.get("checkin")
+    if not ck:
+        return state  # nothing to do
+
+    # If API key is missing, return personalized rule-based fallback
+    if not os.environ.get("OPENAI_API_KEY"):
+        data = _rule_based_fallback(ck)
+        safe_payload = {
+            "summary": (str(data.get("summary")).strip() if data.get("summary") is not None else None),
+            "focus_for_today": _to_list(data.get("focus_for_today")),
+            "risk_flags": _to_list(data.get("risk_flags")),
+        }
+        try:
+            state["day_adjustment"] = DayAdjustment(**safe_payload).model_dump()
+        except ValidationError as ve:
+            log.error("DayAdjustment validation failed (no API key): %s | payload=%r", ve, safe_payload)
+            state["day_adjustment"] = DayAdjustment(
+                summary=safe_payload.get("summary") or "Plan adjusted for today.",
+                focus_for_today=safe_payload.get("focus_for_today") or ["1-min mindful breath before each meeting"],
+                risk_flags=safe_payload.get("risk_flags") or [],
+            ).model_dump()
+        return state
+
+    user_prompt = (
+        f"mood={ck.get('mood')}, sleep_quality={ck.get('sleep_quality')}, "
+        f"energy={ck.get('energy')}, workload={ck.get('workload')}\n"
+        f"notes={ck.get('notes') or ''}\n\n"
+        "Return JSON with: summary, focus_for_today (3-5 items), risk_flags.\n"
+        "Each action must explicitly reflect at least one of: mood, sleep_quality, energy, or workload, "
+        "and differ if any of these inputs change."
+    )
+
+    # Try 1: strict JSON mode
+    try:
+        resp = client.chat.completions.create(
+            model=MODEL,
+            messages=[
+                {"role": "system", "content": CHECKIN_SYS_PROMPT},
+                {"role": "user", "content": user_prompt},
+            ],
+            response_format={"type": "json_object"},
+        )
+        data = json.loads(resp.choices[0].message.content)
+
+        # Validate the JSON-mode payload; if invalid/empty, force fallback to free-form
+        focus_list = _to_list(data.get("focus_for_today"))
+        risk_list = _to_list(data.get("risk_flags"))
+        summary_txt = (str(data.get("summary")).strip() if data.get("summary") is not None else "")
+
+        if not focus_list:  # key requirement for your UI/tests
+            raise ValueError("JSON-mode payload missing non-empty 'focus_for_today'")
+
+        safe_payload = {
+            "summary": summary_txt or None,
+            "focus_for_today": focus_list,
+            "risk_flags": risk_list,
+        }
+
+        try:
+            state["day_adjustment"] = DayAdjustment(**safe_payload).model_dump()
+        except ValidationError as ve:
+            log.error("DayAdjustment validation failed (json mode): %s | payload=%r", ve, safe_payload)
+            state["day_adjustment"] = DayAdjustment(
+                summary=safe_payload.get("summary") or "Plan adjusted for today.",
+                focus_for_today=safe_payload.get("focus_for_today") or ["1-min mindful breath before each meeting"],
+                risk_flags=safe_payload.get("risk_flags") or [],
+            ).model_dump()
+        return state
+
+    except Exception as e:
+        log.warning("Morning check-in JSON mode failed: %s", e)
+
+    # Try 2: free-form + best-effort JSON extraction
+    try:
+        resp = client.chat.completions.create(
+            model=MODEL,
+            messages=[
+                {"role": "system", "content": CHECKIN_SYS_PROMPT},
+                {"role": "user", "content": user_prompt + "\nReply in JSON only."},
+            ],
+        )
+        content = resp.choices[0].message.content or ""
+        # handle ```json fenced output
+        if content.strip().startswith("```"):
+            start = content.find("{")
+            end = content.rfind("}")
+            if start != -1 and end != -1 and end > start:
+                content = content[start:end+1]
+
+        data = json.loads(content)
+        safe_payload = {
+            "summary": (str(data.get("summary")).strip() if data.get("summary") is not None else None),
+            "focus_for_today": _to_list(data.get("focus_for_today")),
+            "risk_flags": _to_list(data.get("risk_flags")),
+        }
+
+        try:
+            state["day_adjustment"] = DayAdjustment(**safe_payload).model_dump()
+        except ValidationError as ve:
+            log.error("DayAdjustment validation failed (free-form): %s | payload=%r", ve, safe_payload)
+            state["day_adjustment"] = DayAdjustment(
+                summary=safe_payload.get("summary") or "Plan adjusted for today.",
+                focus_for_today=safe_payload.get("focus_for_today") or ["1-min mindful breath before each meeting"],
+                risk_flags=safe_payload.get("risk_flags") or [],
+            ).model_dump()
+        return state
+
+    except Exception as e:
+        log.error("Morning check-in free-form mode failed: %s", e)
+
+    # Final safety net: deterministic rule-based plan
+    data = _rule_based_fallback(ck)
+    state["day_adjustment"] = DayAdjustment(
+        summary=(str(data.get("summary")).strip() if data.get("summary") is not None else "Plan adjusted for today."),
+        focus_for_today=_to_list(data.get("focus_for_today")) or ["1-min mindful breath before each meeting"],
+        risk_flags=_to_list(data.get("risk_flags")),
+    ).model_dump()
+    return state

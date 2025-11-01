@@ -12,6 +12,8 @@ from services.storage import save_plan
 from services.break_agent import auto_mindfulness_reminder
 from graph.break_graph import run_break_workflow
 from graph.break_graph import run_llm_break_workflow
+from graph.schemas import CheckIn
+from graph.graph import run_morning_checkin
 
 
 
@@ -23,6 +25,29 @@ st.set_page_config(
     page_icon="🧘",
     layout="centered",
 )
+
+# Readable card style for plan summary (works in light/dark)
+st.markdown("""
+<style>
+.plan-card {
+  padding: 18px 20px;
+  border-radius: 12px;
+  border: 1px solid rgba(148,163,184,.35); /* slate-400-ish */
+  background: rgba(2, 6, 23, 0.35);        /* subtle dark overlay */
+  color: #e5e7eb;                           /* slate-200 text */
+  line-height: 1.7;
+}
+@media (prefers-color-scheme: light) {
+  .plan-card {
+    background: #f8fafc;                    /* light card */
+    color: #0f172a;                         /* slate-900 */
+    border-color: rgba(15,23,42,.15);
+  }
+}
+.plan-card p { margin: 0 0 .7rem 0; }
+</style>
+""", unsafe_allow_html=True)
+
 
 
 # ──────────────────────────────────────────────────────────────
@@ -330,21 +355,10 @@ if result:
     # Summary
     st.markdown("---")
     st.markdown("### 💡 About Your Plan")
-    clean_summary = re.sub(r"#+\s*", "", result.ai_summary)
-    
-    st.markdown(
-        f"""<div style='
-            background: linear-gradient(135deg, #f0f8f0 0%, #e8f5e9 100%);
-            padding: 24px;
-            border-radius: 12px;
-            border-left: 5px solid #4CAF50;
-            font-size: 16px;
-            line-height: 1.8;
-            margin: 16px 0;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.05);
-        '>{clean_summary}</div>""",
-        unsafe_allow_html=True,
-    )
+    clean_summary = re.sub(r"#+\s*", "", result.ai_summary or "").strip()
+    html_summary = clean_summary.replace("\n", "<br>")  # preserve line breaks
+    st.markdown(f"<div class='plan-card'>{html_summary}</div>", unsafe_allow_html=True)
+
 
     # Action buttons
     st.markdown("---")
@@ -487,26 +501,47 @@ st.markdown(
 
 #----break-----
 
-def show_break_chart():
-    if not os.path.exists("data/break_log.json"):
-        st.info("No breaks logged yet.")
-        return
-    logs = json.load(open("data/break_log.json"))
-    df = pd.DataFrame(logs)
-    df["time"] = pd.to_datetime(df["scheduled_time"])
-    today = df[df["time"].dt.date == datetime.today().date()]
-    st.markdown("#### 🧘 Today's Breaks")
-    chart = (
-        alt.Chart(today)
-        .mark_bar()
-        .encode(x="time:T", y="count()", tooltip=["message"])
-        .properties(height=200)
+# ──────────────────────────────────────────────────────────────────────────────
+# 🌅 Morning Wellness Check-In (User Story)
+# ──────────────────────────────────────────────────────────────────────────────
+st.markdown("---")
+st.markdown("## 🌅 Morning Wellness Check-In")
+
+with st.form("checkin_form", clear_on_submit=False):
+    col1, col2 = st.columns(2)
+    with col1:
+        mood = st.selectbox("Mood", ["", "calm", "neutral", "anxious", "frustrated"])
+        energy = st.selectbox("Energy", ["", "low", "medium", "high"])
+    with col2:
+        sleep = st.selectbox("Sleep quality", ["", "poor", "ok", "great"])
+        workload = st.selectbox("Workload", ["", "light", "normal", "heavy"])
+    notes = st.text_area("Notes (optional)")
+    do_checkin = st.form_submit_button("Adjust my plan for today")
+
+if do_checkin:
+    ck = CheckIn(
+        mood=mood or None,
+        sleep_quality=sleep or None,
+        energy=energy or None,
+        workload=workload or None,
+        notes=notes or None,
     )
-    st.altair_chart(chart, use_container_width=True)
+    adj = run_morning_checkin(ck)
 
+    # Optional: save to disk if you decide to re-enable later
+    # from services.checkin_storage import save_checkin
+    # save_checkin(ck.model_dump(), adj.model_dump())
 
+    if adj.summary:
+        st.success(adj.summary)
 
+    if adj.focus_for_today:
+        st.markdown("**Focus for today**")
+        for a in adj.focus_for_today:
+            st.write(f"- {a}")
 
+    if adj.risk_flags:
+        st.caption("Flags: " + ", ".join(adj.risk_flags))
 
 
 
