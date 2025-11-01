@@ -66,7 +66,7 @@ Managed virtual environment dependencies (streamlit, schedule, python-dotenv) to
 The user enters their name and selects work duration in Streamlit.
 The system automatically calculates the next break time (2 hours ahead).
 Clicking “Run Break Agent” logs the scheduled break, displays a motivational message, and stores it in break_log.json.
-The interface shows only the most recent reminder while retaining all logs in JSON for analysi
+The interface shows only the most recent reminder while retaining all logs in JSON for analysis.
 
 
 
