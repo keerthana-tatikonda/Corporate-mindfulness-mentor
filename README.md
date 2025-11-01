@@ -34,3 +34,53 @@ I learned how to debug integration errors, manage structured responses from LLMs
 The **Goal Creation feature** now runs smoothly and provides meaningful, structured output to users.  
 Future work will focus on enhancing the goal decomposition logic and improving user experience.
 
+
+
+
+Iteration 1 Summary — User Story 4
+
+Completed Work
+
+Implemented an AI-driven recommendation engine using OpenAI (ChatOpenAI gpt-4o-mini) integrated via LangGraph.
+
+The system dynamically generates 2–3 personalized mindfulness or breathing techniques each time the user interacts.
+
+Added support for user-specific context, allowing variations based on stress level and emotional tone of the goal (e.g., anxiety vs fatigue).
+
+Updated app.py UI to display structured outputs — technique title, duration, description, step-by-step guidance, and motivational summary.
+
+Verified successful integration with teammates’ stories (Goal Creation, Morning Check-In, Mindful Break Notifications).
+
+Tested the feature locally in Streamlit with different inputs to confirm personalized results.
+
+
+Deferred / Unfinished
+
+Integration with the Stress-Level Tracking Dashboard planned for Iteration 2.
+
+Logging of generated techniques for long-term user analytics deferred to next cycle.
+
+
+Technical / Coordination Challenges
+
+Initial .env file caused GitHub push protection block (OpenAI API key); resolved by removing .env and updating .gitignore.
+
+Adjusted prompt-engineering to ensure diverse and context-relevant AI outputs rather than static or repetitive techniques.
+
+Encountered import issues (services.resources); refactored to use purely AI-generated data flow.
+
+Minor dependency setup issues (langchain_openai install, virtual env activation) resolved through requirement alignment.
+
+
+Prototype Overview
+
+The prototype runs as a Streamlit web application:
+
+User enters a mindfulness goal and stress level.
+
+On clicking “ Get AI-Recommended Techniques”, the system calls run_mentor_cycle() in langgraph_agent.py.
+
+The AI model returns a JSON object containing unique guided exercises and motivational text.
+
+Streamlit renders these dynamically in a clean, interactive format.
+
