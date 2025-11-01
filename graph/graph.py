@@ -54,3 +54,26 @@ def run_goal_decomposition(goal_name: str, duration_type: str, description: str 
     # 2) ask the node to break it into subgoals
     g = Goal(goal_name=goal_name, duration_type=duration_type, description=description or None)
     return generate_decomposed_plan(g, base)
+# --- Morning Check-In Workflow (additive) ---
+from typing import TypedDict
+from langgraph.graph import StateGraph, END
+from .nodes import morning_checkin_node
+from .schemas import CheckIn, DayAdjustment
+
+class CheckInState(TypedDict, total=False):
+    checkin: dict
+    day_adjustment: dict
+
+def create_checkin_graph():
+    g = StateGraph(CheckInState)
+    g.add_node("morning_checkin", morning_checkin_node)
+    g.set_entry_point("morning_checkin")
+    g.add_edge("morning_checkin", END)
+    return g.compile()
+
+def run_morning_checkin(checkin: CheckIn) -> DayAdjustment:
+    compiled = create_checkin_graph()
+    result = compiled.invoke({"checkin": checkin.model_dump()})
+    da = result.get("day_adjustment") or {}
+    return DayAdjustment(**da)
+

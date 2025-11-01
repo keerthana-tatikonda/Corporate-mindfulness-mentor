@@ -1,7 +1,12 @@
+# tests/test_break_workflow.py
+import pytest
+pytest.importorskip("langchain_openai", reason="optional dev dependency not installed locally")
+
 import json, re
 from utils.messages import get_random_break_message
 from services.break_agent import MindfulBreakAgent
 from graph.break_graph import run_llm_break_workflow
+
 
 # ------------------- UNIT TESTS -------------------
 
