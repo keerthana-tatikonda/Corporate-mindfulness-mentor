@@ -120,3 +120,25 @@ The AI model returns a JSON object containing unique guided exercises and motiva
 
 Streamlit renders these dynamically in a clean, interactive format.
 
+#iteration 1 Morning wellness check in - user story 3
+1.Completed Story – Morning Wellness Check-In
+
+Implemented a daily check-in feature allowing users to record mood, sleep quality, energy, and workload each morning.
+The system analyzes responses using the LLM to generate a personalized daily focus plan with short, adaptive suggestions.
+Integrated under the “ Morning Wellness Check-In” section in the main Streamlit app.
+
+2.Deferred or Unfinished:
+
+Add trend visualization for check-ins across days.
+Connect stored check-ins to user profiles for long-term insights.
+
+3.Technical or Coordination Challenges
+
+Resolved LangGraph / LangChain-OpenAI dependency conflicts to keep compatibility with teammates’ requirements.
+Mocked OpenAI calls in test_morning_checkin.py to run tests offline without affecting other user-story modules.
+Coordinated shared session-state handling to ensure check-in results didn’t override goal-creation data.
+
+4.Prototype Note
+
+The feature uses a form-based Streamlit UI connected to run_morning_checkin() in graph/graph.py.
+It processes input through LLM logic in graph/nodes.py, returns a structured DayAdjustment, and displays the summary, focus items, and risk flags dynamically within the app.
