@@ -13,11 +13,18 @@ from services.break_agent import auto_mindfulness_reminder
 from graph.break_graph import run_break_workflow
 from graph.break_graph import run_llm_break_workflow
 from graph.schemas import CheckIn
+#profilepersonalisation and Workload adaptation
+from graph.graph import run_personalized_goal, run_workload_adaptation
+
 from graph.graph import run_morning_checkin
 from services.session import init_session, start_session, stop_session, next_step, get_state
 from services.langgraph_agent import run_mentor_cycle
 
-
+try:
+    from services.storage import save_profile, load_profile
+except Exception:
+    save_profile = None
+    load_profile = lambda *args, **kwargs: None
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Page Setup
@@ -404,6 +411,108 @@ Created with Corporate Mindfulness Mentor
                 mime="text/markdown",
                 use_container_width=True,
             )
+
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 👤 Profile Personalization (runs after you have a base plan)
+# ──────────────────────────────────────────────────────────────────────────────
+st.markdown("---")
+st.markdown("## 👤 Profile Personalization")
+
+with st.form("profile_form", clear_on_submit=False):
+    colA, colB = st.columns(2)
+    with colA:
+        work_schedule = st.text_input("Work schedule", placeholder="Mon–Fri, 9–6; commute 30m")
+        typical_stress = st.slider("Typical stress (0–10)", 0, 10, 5)
+    with colB:
+        prefs = st.text_input("Preferences (comma-separated)", placeholder="short sessions, breathing")
+        cons = st.text_input("Constraints (comma-separated)", placeholder="no audio, shared desk")
+
+    personalize_submit = st.form_submit_button("🎯 Personalize my plan")
+
+if personalize_submit:
+    if st.session_state.get("result") is None:
+        st.info("Generate a goal plan first, then personalize it.")
+    else:
+        from graph.schemas import Goal, UserProfile
+        g = Goal(
+            goal_name=st.session_state["result"].goal,
+            duration_type=st.session_state.get("last_input",{}).get("duration_type","weekly"),
+            description=st.session_state.get("last_input",{}).get("description","")
+        )
+        profile = UserProfile(
+            work_schedule=work_schedule.strip() or "Mon–Fri",
+            typical_stress_level=int(typical_stress),
+            preferences=[p.strip() for p in (prefs or "").split(",") if p.strip()],
+            constraints=[c.strip() for c in (cons or "").split(",") if c.strip()],
+        )
+        try:
+            with st.spinner("Tailoring your plan to your schedule..."):
+                p = run_personalized_goal(g, profile)
+            st.success("✅ Personalized plan created")
+            st.markdown("### 🎯 Personalized Activities")
+            for i, a in enumerate(p.activities, 1):
+                st.markdown(f"{i}. {a}")
+            st.markdown("### 📝 Why this fits you")
+            st.info(p.summary)
+            st.session_state["personalized"] = p
+        except Exception as e:
+            st.error(f"Could not personalize plan: {e}")
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# ⚙️ Workload-Based Adaptation (same section, uses today’s load)
+# ──────────────────────────────────────────────────────────────────────────────
+st.markdown("## ⚙️ Workload-Based Adaptation (Today)")
+
+with st.form("workload_form", clear_on_submit=False):
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        w_date = st.date_input("Date")
+        meetings = st.number_input("Meetings (count)", min_value=0, step=1, value=4)
+    with col2:
+        busy_hours = st.number_input("Busy hours (today)", min_value=0.0, step=0.5, value=4.0)
+        fatigue = st.selectbox("Fatigue", ["", "low", "medium", "high"], index=2)
+    with col3:
+        blockers = st.text_input("Blockers (comma-separated)", placeholder="oncall, release")
+    adapt_submit = st.form_submit_button("🔧 Adapt today’s plan")
+
+if adapt_submit:
+    base = st.session_state.get("personalized") or st.session_state.get("result")
+    base_acts = []
+    if base:
+        # both PersonalizedPlanResponse and PlanResponse have activity lists
+        base_acts = getattr(base, "activities", None) or getattr(base, "suggested_activities", None) or []
+
+    if not base_acts:
+        st.info("Create or personalize a plan first, then adapt it.")
+    else:
+        from graph.schemas import Goal, WorkloadReport
+        g = Goal(
+            goal_name= (getattr(base, "goal", None) or st.session_state["result"].goal),
+            duration_type=st.session_state.get("last_input",{}).get("duration_type","weekly"),
+            description=st.session_state.get("last_input",{}).get("description","")
+        )
+        wl = WorkloadReport(
+            date=w_date.isoformat(),
+            meetings=int(meetings),
+            busy_hours=float(busy_hours),
+            fatigue=(fatigue or None),
+            blockers=[b.strip() for b in (blockers or "").split(",") if b.strip()]
+        )
+        try:
+            from graph.graph import run_workload_adaptation
+            with st.spinner("Right-sizing today’s steps..."):
+                adapted = run_workload_adaptation(g, base_acts, wl)
+            st.success("✅ Adapted plan for today")
+            st.markdown("### 📋 Today’s Micro-Plan")
+            for i, a in enumerate(adapted.day_plan, 1):
+                st.markdown(f"{i}. {a}")
+            st.markdown("### 💡 Rationale")
+            st.caption(adapted.rationale)
+        except Exception as e:
+            st.error(f"Could not adapt today’s plan: {e}")
 
 
 # ──────────────────────────────────────────────────────────────────────────────

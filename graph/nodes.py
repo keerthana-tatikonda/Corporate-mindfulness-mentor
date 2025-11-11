@@ -2,11 +2,19 @@
 from typing import List, Dict, Any, Tuple, Optional
 import json
 import re
-import hashlib, random
+import hashlib, random, uuid
+import os
 
 from services.llm import client, MODEL
-from .schemas import Goal, PlanResponse, SubGoal, DecomposedPlan
-from datetime import datetime
+#Gola creation, Profile personalisation and Workload adaptation
+from .schemas import (
+    Goal, PlanResponse, SubGoal, DecomposedPlan,
+    UserProfile, PersonalizedPlanRequest, PersonalizedPlanResponse,
+    WorkloadReport, AdaptedPlanResponse
+)
+
+
+from datetime import datetime, time
 import random
 import hashlib
 from .schemas import DayAdjustment
@@ -572,18 +580,540 @@ ID: {unique_seed}
         ai_summary=ai_summary,
     )
 
+#Profile personalisation and Workload adaptation
+# --- add near top of nodes.py if not present ---
+
+
+# HH or H, optional :MM, optional am/pm
+_TIME_RX = re.compile(r"(?i)\b(\d{1,2})(?::?(\d{2}))?\s*(am|pm)?\b")
+
+
+def _parse_work_schedule(txt: str) -> tuple[list[str], time, time]:
+    """
+    Returns (days, start_time, end_time). Defaults to Mon–Fri 09:00–17:00.
+    Understands:
+      - "Mon-Fri 9-5"
+      - "Mon–Fri 09:00-17:30"
+      - "Mon-Fri 6pm to 3am"
+      - "Mon,Wed,Fri 10-6"
+    """
+    if not txt:
+        return (["Mon","Tue","Wed","Thu","Fri"], time(9,0), time(17,0))
+
+    days = ["Mon","Tue","Wed","Thu","Fri"]
+    lower = txt.lower()
+
+    # crude day extraction
+    day_tokens = [("mon","Mon"),("tue","Tue"),("tues","Tue"),("wed","Wed"),
+                  ("thu","Thu"),("thur","Thu"),("fri","Fri"),("sat","Sat"),("sun","Sun")]
+    found = [v for k,v in day_tokens if k in lower]
+    if found:
+        # keep ordering Mon..Sun but only those found
+        order = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"]
+        days = [d for d in order if d in set(found)]
+
+    # time window – find two times in the string
+    # accept separators '-', '–', '—', 'to'
+    sep = " to " if " to " in lower else "-"
+    if "–" in lower: sep = "–"
+    if "—" in lower: sep = "—"
+
+    start, end = time(9,0), time(17,0)
+    parts = re.split(r"\s*(?:to|–|—|-)\s*", lower, maxsplit=1)
+    if len(parts) == 2:
+        a, b = parts
+    else:
+        a, b = lower, ""
+
+    def _match_time(chunk: str) -> time | None:
+        m = _TIME_RX.search(chunk)
+        if not m:
+            return None
+        hh = int(m.group(1))
+        mm = int(m.group(2) or 0)
+        ampm = (m.group(3) or "").lower()
+        if ampm == "pm" and hh < 12:
+            hh += 12
+        if ampm == "am" and hh == 12:
+            hh = 0
+        # if no am/pm and looks like “9-5”, guess typical office hours
+        return time(hh % 24, mm % 60)
+
+    t1 = _match_time(a)
+    t2 = _match_time(b)
+    if t1: start = t1
+    if t2: end = t2
+
+    return (days, start, end)
+
+# --- label pools and label picker ---
+LABEL_POOLS = {
+    "breathing": [
+        "5-min box breathing",
+        "4-7-8 breathing (5 min)",
+        "coherent breathing (5 min)",
+        "paced breathing (5 min)"
+    ],
+    "nature": [
+        "2-min window gaze + 3-min walk",
+        "plant-focus micro-break (5 min)",
+        "fresh-air loop (5 min)",
+        "brief nature visualization (5 min)"
+    ],
+    "body_scan": [
+        "quiet body scan (5 min)",
+        "top-to-toe tension release (5 min)",
+        "progressive muscle relax (5 min)",
+        "micro body check (5 min)"
+    ],
+    "journaling": [
+        "gratitude journaling (5 min)",
+        "3 wins today (5 min)",
+        "mind dump + reframe (5 min)",
+        "brief reflection (5 min)"
+    ],
+    "movement": [
+        "mindful stretch (5 min)",
+        "posture reset + shoulder rolls (5 min)",
+        "neck/back mobility (5 min)",
+        "desk yoga flow (5 min)"
+    ],
+}
+
+def _pick_label(modality: str, seed: int) -> str:
+    pool = LABEL_POOLS.get(modality, ["5-min mindful pause"])
+    rnd = random.Random(seed)
+    return rnd.choice(pool)
+
+
+
+def _slot(hh: int, mm: int, label: str) -> str:
+    return f"{hh:02d}:{mm:02d} — {label}"
+
+def _choose_modalities(prefs: list[str], constraints: list[str]) -> list[str]:
+    base = ["breathing","movement","nature","body_scan","journaling"]
+    prefs_norm = [p.strip().lower() for p in (prefs or []) if p.strip()]
+    # order by user preference first
+    ordered = sorted(base, key=lambda m: (prefs_norm.index(m) if m in prefs_norm else 99))
+    # simple constraint: “no audio” → avoid body_scan
+    if any("no audio" in c.lower() for c in (constraints or [])):
+        ordered = [m for m in ordered if m != "body_scan"]
+    return ordered or base
+
+
+
+def _min_of_day(hh: int, mm: int) -> int:
+    return (hh % 24) * 60 + (mm % 60)
+
+def _hm_from_min(m: int) -> tuple[int, int]:
+    m = m % (24 * 60)
+    return m // 60, m % 60
+
+def _deterministic_timeline(
+    schedule: str,
+    prefs: List[str],
+    constraints: List[str],
+    typical_stress: int | None,
+    variation_salt: str,
+) -> List[str]:
+    """
+    Build 3–6 time-stamped micro-activities inside the work window with slight randomness.
+    - honors 'no audio' by avoiding body_scan
+    - jitters times so they don't look identical across runs
+    - biases activity type based on stress and prefs
+    """
+    rnd = random.Random(variation_salt)  # stable randomness per run
+
+    # 1) Parse schedule
+    days, start, end = _parse_work_schedule(schedule)
+    s = start.hour * 60 + start.minute
+    e = end.hour * 60 + end.minute
+    span = max(0, (e - s) % (24 * 60)) or 8 * 60  # assume 8h if couldn't parse
+
+    # 2) Pick 4 anchor slots that make sense across the day
+    anchors = [s + 45, s + span//3, s + (2*span)//3, s + span - 30]
+    # jitter +/- up to 12 min (more jitter if stress higher)
+    jitter_max = 6 + int((typical_stress or 5) * 1.2)  # up to ~18 minutes
+    anchors = [max(0, a + rnd.randint(-jitter_max, jitter_max)) for a in anchors]
+
+    # 3) Choose modalities using prefs & constraints
+    mod_order = _choose_modalities(prefs, constraints)
+    # Slight shuffle but keep preference priority
+    tail = mod_order[1:]
+    rnd.shuffle(tail)
+    mod_mix = [mod_order[0]] + tail
+
+    # 4) Labels pool (no audio -> drop body_scan)
+    allowed = set(["breathing","nature","body_scan","journaling","movement"])
+    if any("no audio" in c.lower() for c in constraints):
+        allowed.discard("body_scan")
+    mod_mix = [m for m in mod_mix if m in allowed] or ["breathing","movement","nature"]
+
+    out = []
+    for i, a in enumerate(anchors):
+        hh = (a // 60) % 24
+        mm = a % 60
+        modality = mod_mix[i % len(mod_mix)]
+        label = _pick_label(modality, seed=rnd.randint(0, 10_000))
+
+        # stress-aware duration selection (3–10 min)
+        base = 5 + rnd.randint(-1, 2)
+        if (typical_stress or 0) >= 7:
+            base = min(10, base + 2)  # slightly longer if very stressed
+
+        instruction = {
+            "breathing": "Breathe slowly. Inhale 4, hold 4, exhale 6. Keep shoulders relaxed.",
+            "nature": "Look away from screens, focus on depth/green tones or take a short walk.",
+            "body_scan": "Scan head to toe and relax small areas of tension.",
+            "journaling": "Write 1–2 sentences: one feeling + one action you’ll try today.",
+            "movement": "Stand up, roll shoulders, neck mobility, soften jaw. Move gently.",
+        }.get(modality, "Pause and breathe. Keep it easy and brief.")
+
+        out.append(f"{hh:02d}:{mm:02d} — {base}-min {label}. {instruction}")
+
+    # Occasionally add a 5th item near mid afternoon
+    if rnd.random() < 0.35:
+        mid = s + (2 * span) // 3 + rnd.randint(-10, 10)
+        hh, mm = (mid // 60) % 24, mid % 60
+        modality = rnd.choice(mod_mix)
+        label = _pick_label(modality, seed=rnd.randint(0, 10_000))
+        out.append(f"{hh:02d}:{mm:02d} — 5-min {label}. Keep it light and mindful.")
+
+    return out[:6]
+
+# --- DROP-IN REPLACEMENT: schedule-aware, constraint-aware (more varied) ---
+def personalize_plan_node(state: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Input state:
+      - goal_name, duration_type, description
+      - profile: UserProfile(work_schedule, typical_stress_level, preferences[], constraints[])
+    Output state adds:
+      - p_activities: List[str]   (e.g., '09:30 — 5-min box breathing …')
+      - p_summary: str
+      - source: "LLM" | "fallback"
+    """
+    import random, uuid
+
+    goal_name = state["goal_name"]
+    duration_type = state["duration_type"]
+    description = state.get("description", "")
+    profile: UserProfile = state["profile"]
+
+    prefs_list = profile.preferences or []
+    cons_list  = profile.constraints or []
+    sched = profile.work_schedule or "Mon–Fri 09:00-17:00"
+    stress = getattr(profile, "typical_stress_level", None)
+
+    # better salt + varied writing styles to avoid repetitive outputs
+    salt  = uuid.uuid4().hex[:8]
+    styles = [
+        "very concise and practical",
+        "gentle and encouraging",
+        "energetic and motivational",
+        "clinically neutral",
+    ]
+    style = random.choice(styles)
+
+    system = (
+        "You are a corporate mindfulness coach. "
+        "Always return JSON with 'timeline' (array of 3–6 items) and 'summary' (string). "
+        "Each timeline item MUST include time (HH:MM 24-hour), duration (3–10 minutes), "
+        "a short label, and an instruction sentence. "
+        "All items must be inside the user's work schedule and must honor constraints "
+        "(e.g., if 'no audio', avoid audio-guided activities)."
+    )
+
+    user = f"""
+Goal: {goal_name}
+Cadence: {duration_type}
+Context: {description or "-"}
+Work schedule: {sched}
+Typical stress (0–10): {stress if stress is not None else "-"}
+Preferences: {", ".join(prefs_list) or "-"}
+Constraints: {", ".join(cons_list) or "-"}
+Writing style: {style}
+Randomness hint: {salt}
+
+Return ONLY a JSON object like:
+{{
+  "timeline": [
+    {{"time":"09:30","duration_min":5,"label":"box breathing","instructions":"Inhale 4, hold 4, exhale 6…"}}
+  ],
+  "summary":"Why these fit the profile."
+}}
+"""
+
+    # --- helper: basic validation/cleanup of LLM items ---
+    def _clean_items(timeline: List[Dict[str, Any]]) -> List[str]:
+        seen = set()
+        cleaned: List[str] = []
+        for item in timeline:
+            t = str(item.get("time", "")).strip()
+            d = item.get("duration_min")
+            lbl = str(item.get("label", "")).strip()
+            instr = str(item.get("instructions", "")).strip()
+            if not t or not lbl:
+                continue
+            # normalize & dedupe on time+label
+            key = (t, lbl.lower())
+            if key in seen:
+                continue
+            seen.add(key)
+            dur_txt = f"{int(d)}-min " if isinstance(d, int) else ""
+            cleaned.append(f"{t} — {dur_txt}{lbl}. {instr}".strip())
+        return cleaned
+
+    # --- Try LLM path first: ask for multiple candidates and pick one at random ---
+    data = {}
+    try:
+        resp = client.chat.completions.create(
+            model=MODEL,
+            messages=[{"role": "system", "content": system},
+                      {"role": "user", "content": user}],
+            temperature=0.9,          # ↑ variety
+            top_p=0.95,               # ↑ diversity
+            n=3,                      # request 3 variants
+            response_format={"type": "json_object"},
+            max_tokens=900,
+        )
+        # choose one random candidate
+        choice = random.choice(resp.choices)
+        data = json.loads(choice.message.content or "{}")
+    except Exception:
+        data = {}
+
+    timeline = data.get("timeline") or []
+    summary  = (data.get("summary") or "").strip()
+
+    items = _clean_items(timeline)
+    source = "LLM" if len(items) >= 3 else "fallback"
+
+    # Log to your terminal so you can see the path used
+    print(
+        f"[ProfilePersonalization] Source={source.upper()} | "
+        f"Goal='{goal_name}' | Schedule='{sched}' | Stress={stress} | "
+        f"Prefs={prefs_list} | Constraints={cons_list}"
+    )
+
+    # If model gave too little or nothing, use deterministic timeline (your existing helper)
+    if len(items) < 3:
+        items = _deterministic_timeline(
+            schedule=sched,
+            prefs=prefs_list,
+            constraints=cons_list,
+            typical_stress=stress,
+            variation_salt=salt,
+        )
+        if not summary:
+            summary = (
+                "A compact timeline inside your work hours, aligned with your "
+                "preferences and constraints."
+            )
+
+    return {
+        **state,
+        "p_activities": items[:6],
+        "p_summary": summary or "A personalized timeline for your schedule.",
+        "source": source,
+    }
+
+
+
+def adapt_plan_node(state: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Input state:
+      - goal_name, duration_type
+      - base_activities: List[str]  (what you'd normally do)
+      - workload: WorkloadReport {date, meetings, busy_hours, fatigue, blockers[]}
+    Output:
+      - adapted_plan: List[str] (2–5 items)
+      - adapted_rationale: str
+      - adapted_source: "LLM" | "fallback"  (for observability)
+    """
+    goal = state.get("goal_name", "")
+    cadence = state.get("duration_type", "")
+    base_activities = state.get("base_activities", []) or []
+    workload: WorkloadReport = state.get("workload")
+
+    # --- helpers for deterministic fallback (kept local so this function is self-contained) ---
+    def _tier(busy_hours: float) -> tuple[int, int]:
+        # (target_count, max_dur_min)
+        if busy_hours >= 7:  return (2, 5)
+        if busy_hours >= 5:  return (3, 7)
+        return (5, 10)
+
+    _POOLS = {
+        "calm": [
+            "3–5 min box breathing (inhale 4, hold 4, exhale 6)",
+            "3–5 min grounding (feel both feet, scan contact points)",
+            "2–3 min soft-gaze eye break",
+            "brief body scan (3–5 min), release jaw/neck/shoulders",
+        ],
+        "focus": [
+            "90-sec pre-task reset: 3 slow breaths + write one next action",
+            "2-min posture reset + 60-sec eye rest",
+            "2-min single-task pledge: silence notifications and set a 20-min timer",
+        ],
+        "movement_light": [
+            "3–5 min desk stretch: neck, wrists, traps",
+            "3–5 min doorway pec stretch + shoulder rolls",
+            "3–5 min stand, shake out arms, hip circles",
+        ],
+        "movement_walk": [
+            "5–10 min nature micro-walk",
+            "5–8 min corridor loop (nose breathing)",
+            "7–10 min outdoor fresh-air walk",
+        ],
+        "reflection": [
+            "2–3 min ‘what went well’ note",
+            "3–5 min gratitude jot (3 items)",
+            "2–3 min quick de-brief: one lesson, one win",
+        ],
+    }
+
+    def _modalities(fatigue: str, blockers: List[str]) -> List[str]:
+        b = [x.lower() for x in (blockers or [])]
+        f = (fatigue or "").lower()
+        if f == "high":
+            base = ["calm", "focus", "reflection"]
+        elif f == "low":
+            base = ["movement_walk", "movement_light", "focus", "calm"]
+        else:
+            base = ["movement_light", "calm", "focus", "reflection"]
+        if any("oncall" in x for x in b):
+            base = [m for m in base if m != "movement_walk"]
+            if "movement_light" not in base:
+                base.insert(0, "movement_light")
+        return base
+
+    def _hm(mins: int) -> tuple[int, int]:
+        mins %= (24 * 60)
+        return mins // 60, mins % 60
+
+    def _slot_text(mins: int, label: str) -> str:
+        hh, mm = _hm(mins)
+        return f"{hh:02d}:{mm:02d} — {label}"
+
+    def _fallback_plan(w: WorkloadReport) -> tuple[List[str], str]:
+        busy = float(getattr(w, "busy_hours", 0.0) or 0.0)
+        meetings = int(getattr(w, "meetings", 0) or 0)
+        fatigue = getattr(w, "fatigue", "") or ""
+        blockers = getattr(w, "blockers", []) or []
+
+        target_count, max_dur = _tier(busy)
+        mods = _modalities(fatigue, blockers)
+
+        now = datetime.now()
+        seed = int(now.strftime("%Y%m%d%H"))
+        rnd = random.Random(seed)
+
+        # position items later in the day to respect workload
+        anchors = []
+        base_m = now.hour * 60 + now.minute
+        step = rnd.randint(60, 110)
+        for _ in range(target_count):
+            base_m += step + rnd.randint(10, 40)
+            anchors.append(base_m)
+
+        items = []
+        for i, a in enumerate(anchors):
+            mod = mods[i % len(mods)]
+            label = rnd.choice(_POOLS.get(mod, _POOLS["calm"]))
+            if "min" not in label:
+                label = f"{max_dur}-min {label}"
+            items.append(_slot_text(a, label))
+
+        rationale = (
+            f"Given {int(busy)} busy hours, {meetings} meetings, fatigue: {fatigue or 'n/a'}, "
+            f"and blockers: {', '.join(blockers) or 'none'}, "
+            f"the plan keeps total effort to {target_count} items (≤{max_dur} min each) "
+            f"and places them later in the workday. Modalities: {', '.join(mods)}."
+        )
+        return items, rationale
+
+    # -------------------- LLM-first attempt --------------------
+    busy = float(getattr(workload, "busy_hours", 0.0) or 0.0)
+    meetings = int(getattr(workload, "meetings", 0) or 0)
+    fatigue = getattr(workload, "fatigue", "") or ""
+    blockers = getattr(workload, "blockers", []) or []
+
+    target_count, max_dur = _tier(busy)
+
+    system = (
+        "You are a structured corporate wellness coach. "
+        "Return valid JSON only with keys 'day_plan' (array of 2–6 items) and 'rationale' (string). "
+        "Each item must include time (HH:MM 24h), duration_min (int), label (short), and instructions (one sentence). "
+        "Use base_activities as inspiration but right-size to today's workload."
+    )
+    user = {
+        "goal": goal,
+        "cadence": cadence,
+        "busy_hours": busy,
+        "meetings": meetings,
+        "fatigue": fatigue,
+        "blockers": blockers,
+        "target_items": target_count,
+        "max_duration_min": max_dur,
+        "base_activities": base_activities[:6],
+        "instruction": "Prefer placing items after midday when hours are heavy."
+    }
+
+    adapted_plan: List[str] = []
+    adapted_rationale = ""
+    source = "fallback"
+
+    try:
+        resp = client.chat.completions.create(
+            model=MODEL,
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": json.dumps(user, ensure_ascii=False, indent=2)},
+            ],
+            temperature=0.8,
+            top_p=0.95,
+            response_format={"type": "json_object"},
+            max_tokens=900,
+        )
+        data = json.loads(resp.choices[0].message.content or "{}")
+        js_items = data.get("day_plan") or []
+        for it in js_items:
+            t   = str(it.get("time", "")).strip()
+            dur = it.get("duration_min")
+            lab = str(it.get("label", "")).strip()
+            ins = str(it.get("instructions", "")).strip()
+            if t and lab:
+                dur_txt = f"{int(dur)}-min " if isinstance(dur, int) else ""
+                adapted_plan.append(f"{t} — {dur_txt}{lab}. {ins}".strip())
+        adapted_rationale = (data.get("rationale") or "").strip()
+        if len(adapted_plan) >= 2:
+            source = "LLM"
+    except Exception:
+        # fall through to deterministic
+        pass
+
+    # -------------------- deterministic fallback --------------------
+    if source != "LLM":
+        adapted_plan, adapted_rationale = _fallback_plan(workload)
+
+    # helpful console line so you can see which path was used
+    print(f"[WorkloadAdaptation] source={source} busy={busy} meetings={meetings} fatigue={fatigue} blockers={blockers}")
+
+    return {
+        **state,
+        "adapted_plan": adapted_plan[:5],
+        "adapted_rationale": adapted_rationale or "Adjusted to match today's workload.",
+        "adapted_source": source,
+    }
+
+
+
 # --- Morning Check-In Node (additive) ---
 # --- Morning Check-In Node (robust & personalized fallback) ---
 # # --- Morning Check-In (helpers + node) ---
-import os
-import json
+
 import logging
 import hashlib
-import random
-from typing import Dict, Any, List
 from pydantic import ValidationError
-
-from services.llm import client, MODEL
 from .schemas import DayAdjustment
 
 log = logging.getLogger(__name__)
@@ -595,7 +1125,7 @@ CHECKIN_SYS_PROMPT = (
     "Reply in strict JSON with keys: summary (str), focus_for_today (list[str]), risk_flags (list[str])."
 )
 
-def _to_list(value):
+def _to_list_checkin(value):
     """Coerce arbitrary JSON-ish values into List[str]."""
     if value is None:
         return []
@@ -771,8 +1301,8 @@ def morning_checkin_node(state: Dict[str, Any]) -> Dict[str, Any]:
         data = _rule_based_fallback(ck)
         safe_payload = {
             "summary": (str(data.get("summary")).strip() if data.get("summary") is not None else None),
-            "focus_for_today": _to_list(data.get("focus_for_today")),
-            "risk_flags": _to_list(data.get("risk_flags")),
+            "focus_for_today": _to_list_checkin(data.get("focus_for_today")),
+            "risk_flags": _to_list_checkin(data.get("risk_flags")),
         }
         try:
             state["day_adjustment"] = DayAdjustment(**safe_payload).model_dump()
@@ -807,8 +1337,8 @@ def morning_checkin_node(state: Dict[str, Any]) -> Dict[str, Any]:
         data = json.loads(resp.choices[0].message.content)
 
         # Validate the JSON-mode payload; if invalid/empty, force fallback to free-form
-        focus_list = _to_list(data.get("focus_for_today"))
-        risk_list = _to_list(data.get("risk_flags"))
+        focus_list = _to_list_checkin(data.get("focus_for_today"))
+        risk_list = _to_list_checkin(data.get("risk_flags"))
         summary_txt = (str(data.get("summary")).strip() if data.get("summary") is not None else "")
 
         if not focus_list:  # key requirement for your UI/tests
@@ -854,8 +1384,8 @@ def morning_checkin_node(state: Dict[str, Any]) -> Dict[str, Any]:
         data = json.loads(content)
         safe_payload = {
             "summary": (str(data.get("summary")).strip() if data.get("summary") is not None else None),
-            "focus_for_today": _to_list(data.get("focus_for_today")),
-            "risk_flags": _to_list(data.get("risk_flags")),
+            "focus_for_today": _to_list_checkin(data.get("focus_for_today")),
+            "risk_flags": _to_list_checkin(data.get("risk_flags")),
         }
 
         try:

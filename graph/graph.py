@@ -1,8 +1,15 @@
 # graph/graph.py
 from langgraph.graph import StateGraph, END
 from typing import TypedDict, List
-from .schemas import Goal, PlanResponse, DecomposedPlan
-from .nodes import generate_plan_node, generate_decomposed_plan  # NOTE: no import of generate_goal_plan
+from .schemas import (
+    Goal, PlanResponse, DecomposedPlan,
+    UserProfile, PersonalizedPlanRequest, PersonalizedPlanResponse,
+    WorkloadReport, AdaptedPlanResponse
+)
+from .nodes import (
+    generate_plan_node, generate_decomposed_plan,
+    personalize_plan_node, adapt_plan_node
+)
 
 
 class GoalState(TypedDict):
@@ -54,6 +61,79 @@ def run_goal_decomposition(goal_name: str, duration_type: str, description: str 
     # 2) ask the node to break it into subgoals
     g = Goal(goal_name=goal_name, duration_type=duration_type, description=description or None)
     return generate_decomposed_plan(g, base)
+
+# --- Profile Personalization ---
+
+class PersonalizeState(TypedDict):
+    goal_name: str
+    duration_type: str
+    description: str
+    profile: UserProfile  # Pydantic object
+    p_activities: List[str]
+    p_summary: str
+
+def create_personalize_graph():
+    g = StateGraph(PersonalizeState)
+    g.add_node("personalize", personalize_plan_node)
+    g.set_entry_point("personalize")
+    g.add_edge("personalize", END)
+    return g.compile()
+
+def run_personalized_goal(goal: Goal, profile: UserProfile) -> PersonalizedPlanResponse:
+    graph = create_personalize_graph()
+    out = graph.invoke({
+        "goal_name": goal.goal_name,
+        "duration_type": goal.duration_type,
+        "description": goal.description or "",
+        "profile": profile,
+        "p_activities": [],
+        "p_summary": ""
+    })
+    return PersonalizedPlanResponse(
+        goal=goal.goal_name,
+        activities=out["p_activities"],
+        summary=out["p_summary"]
+    )
+
+
+# --- Workload-Based Adaptation ---
+
+class AdaptState(TypedDict):
+    goal_name: str
+    duration_type: str
+    base_activities: List[str]
+    workload: WorkloadReport
+    adapted_plan: List[str]
+    adapted_rationale: str
+
+def create_adaptation_graph():
+    g = StateGraph(AdaptState)
+    g.add_node("adapt", adapt_plan_node)
+    g.set_entry_point("adapt")
+    g.add_edge("adapt", END)
+    return g.compile()
+
+def run_workload_adaptation(
+    goal: Goal,
+    base_activities: List[str],
+    workload: WorkloadReport
+) -> AdaptedPlanResponse:
+    graph = create_adaptation_graph()
+    out = graph.invoke({
+        "goal_name": goal.goal_name,
+        "duration_type": goal.duration_type,
+        "base_activities": base_activities,
+        "workload": workload,
+        "adapted_plan": [],
+        "adapted_rationale": ""
+    })
+    return AdaptedPlanResponse(
+        goal=goal.goal_name,
+        day_plan=out["adapted_plan"],
+        rationale=out["adapted_rationale"]
+    )
+
+
 # --- Morning Check-In Workflow (additive) ---
 from typing import TypedDict
 from langgraph.graph import StateGraph, END

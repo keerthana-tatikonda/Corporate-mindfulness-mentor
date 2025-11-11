@@ -401,5 +401,96 @@
     ],
     "ai_summary": "This personalized plan focuses on weekly activities designed to help you reduce daily stress through immersion in nature, reflection on personal experiences, and consistent breathing practices.",
     "saved_at": 1762035179
+  },
+  {
+    "goal": "improve focus",
+    "suggested_activities": [
+      "20-minute guided meditation session twice per week",
+      "30-minute nature walk on weekends",
+      "Evening journaling practice (15 minutes, 3x per week)",
+      "Weekly digital detox hour (no screens)"
+    ],
+    "ai_summary": "A balanced weekly plan incorporating meditation, nature connection, and reflection for sustained wellbeing.",
+    "saved_at": 1762646562
+  },
+  {
+    "goal": "Reduce daily stress",
+    "suggested_activities": [
+      "1. Guided Mindfulness Meditation (15 minutes) - Join a weekly online session focusing on breathing techniques and body awareness to help reduce stress levels. Consider using apps like Headspace or Calm for guided sessions.",
+      "2. Nature Walk (30 minutes) - Plan a weekly nature walk during your lunch break, focusing on the sights, sounds, and smells around you to engage your senses and clear your mind.",
+      "3. Stress Journaling (20 minutes) - Dedicate one day each week to reflect on the past week's stressors by writing them down, along with coping strategies that worked or didn't work. This encourages mindfulness about stress triggers."
+    ],
+    "ai_summary": "This plan aims to provide structured activities focused on mindfulness that can be incorporated into your weekly routine. Each activity is designed to cultivate awareness and reduce daily stress effectively.",
+    "saved_at": 1762647865
+  },
+  {
+    "goal": "Need a plan to reduce anxiety for 3 weeks",
+    "suggested_activities": [
+      "Week 1: Guided Visualization - Spend 15 minutes each morning visualizing a peaceful place, engaging all senses. Use an app like Calm or Insight Timer to follow along with a guided session.",
+      "Week 2: Mindful Breathing - Dedicate 10 minutes daily to deep breathing exercises. Focus on inhaling for a count of four, holding for four, and exhaling for six. Track your feelings in a journal post-session.",
+      "Week 3: Nature Walk with Awareness - Take a walk in nature at least twice this week, aiming for mindfulness by noticing the sounds, smells, and sights around you. Spend an extra moment on one particularly beautiful detail."
+    ],
+    "ai_summary": "This personalized plan is designed to help reduce anxiety over three weeks through specific mindfulness activities that engage visualization, breath awareness, and connection with nature.",
+    "saved_at": 1762649171
+  },
+  {
+    "goal": "reduce stress in 2 weeks",
+    "suggested_activities": [
+      "Guided Mindfulness Meditation (20 minutes) - Use an app or online resource to engage in a focused breathing meditation. Set aside time every Friday afternoon to unwind and clear your mind before the weekend.",
+      "Nature Walk with Mindful Observation (30 minutes) - Choose a nearby park or nature trail. Every Wednesday, take a break during lunch to walk and consciously observe your surroundings, focusing on sensory experiences such as sounds, smells, and sights.",
+      "Mindful Journaling Session (15 minutes) - Every Tuesday morning, write about your thoughts and feelings regarding stressors at work. Reflect on what triggers these emotions and how you can respond differently."
+    ],
+    "ai_summary": "This personalized plan includes guided meditations, nature walks for grounding, and reflective journaling aimed at systematically reducing stress over two weeks by building mindfulness practices into your weekly routine.",
+    "saved_at": 1762652205
+  },
+  {
+    "goal": "Need a plan to reduce anxiety for 3 weeks",
+    "suggested_activities": [
+      "Daily Morning Breathing Exercise: Start each day with a 10-minute guided breathing exercise focused on inhaling for a count of four, holding for four, and exhaling for six. Use an app like Headspace or Calm to guide you.",
+      "Midday Mindfulness Walk: Take a 15-minute walk during your lunch break where you focus solely on your surroundings. Notice the colors, sounds, and sensations without judgment. This can help clear your mind and reduce anxiety levels.",
+      "Evening Gratitude Journaling: Spend 10 minutes each evening writing down three things you're grateful for that day. Reflect on positive moments to shift your focus from anxious thoughts to gratitude."
+    ],
+    "ai_summary": "This customized plan includes daily activities aimed at reducing anxiety through breathing exercises, mindful walking, and gratitude journaling over the next three weeks.",
+    "saved_at": 1762654972
+  },
+  {
+    "goal": "manage anxiety",
+    "suggested_activities": [
+      "Attend a monthly guided meditation workshop focusing on anxiety management techniques, such as body scans and breath awareness.",
+      "Participate in a nature walk each month where you practice mindful observation of your surroundings, noting sensations and thoughts without judgment.",
+      "Engage in a creative expression session (like journaling or drawing) every month to process and release anxiety-triggering thoughts."
+    ],
+    "ai_summary": "This customized plan incorporates structured sessions designed to help manage anxiety through focused workshops, mindful engagement with nature, and creative self-expression. Each activity encourages present-moment awareness and emotional processing to build resilience against anxiety.",
+    "saved_at": 1762814611
+  },
+  {
+    "goal": "need to reduce anxiety",
+    "suggested_activities": [
+      "Guided Visualization Session: Spend 20 minutes each week visualizing a peaceful place. Use an app or online resource to guide you through the experience, focusing on sensory details like sounds and smells that evoke calmness.",
+      "Breathing Exercises During Breaks: Implement a 5-minute deep breathing exercise at the start of each work break. Inhale for four counts, hold for four counts, exhale for six counts, and repeat until feeling more centered.",
+      "Mindful Journaling: Dedicate 15 minutes weekly to write down your thoughts and feelings about what causes your anxiety. After writing, reflect on three positive aspects of your week to shift focus from anxiety triggers."
+    ],
+    "ai_summary": "This customized plan focuses on specific mindfulness activities designed to help reduce anxiety through visualization, breathing techniques, and reflective journaling, allowing you to cultivate a sense of calm gradually.",
+    "saved_at": 1762815376
+  },
+  {
+    "goal": "need to reduce stress",
+    "suggested_activities": [
+      "Morning 5-Minute Breathing Exercise: Focus on inhaling deeply through your nose for a count of four, holding for four, and exhaling slowly through your mouth for a count of six. Repeat this cycle five times to start your day with calm.",
+      "Midday Gratitude Journaling: Spend 10 minutes during your lunch break writing down three specific things that you are grateful for. This will shift your focus from stressors to positive aspects of your life.",
+      "Evening Guided Visualization: Before bed, dedicate 15 minutes to listen to a guided visualization specifically designed to relieve stress. Visualize a peaceful environment where you feel safe and relaxed."
+    ],
+    "ai_summary": "This plan includes focused breathing exercises in the morning, gratitude journaling at midday, and guided visualization before bedtime. These daily activities are designed specifically to reduce stress by enhancing mindfulness and promoting relaxation.",
+    "saved_at": 1762816377
+  },
+  {
+    "goal": "improve focus",
+    "suggested_activities": [
+      "Engage in a 10-minute 'Focused Breathing' session where you inhale deeply for four counts, hold for four counts, and exhale for six counts. Repeat this cycle five times to enhance concentration.",
+      "Participate in a monthly 'Mindful Walking' session during your lunch break. Spend at least 15 minutes walking in nature or around the office without distractions, focusing solely on the sensations of your feet touching the ground and your breath.",
+      "Implement a 'Single-Tasking Day' once a month where you commit to completing only one task at a time without any digital interruptions, including checking emails or messages, allowing your mind to focus fully on that single activity."
+    ],
+    "ai_summary": "This plan focuses on enhancing concentration through structured mindfulness activities tailored specifically to improve focus. Each activity promotes sustained attention and clarity while breaking away from multitasking habits.",
+    "saved_at": 1762819344
   }
 ]
