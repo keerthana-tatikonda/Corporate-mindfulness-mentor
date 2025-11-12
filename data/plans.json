@@ -492,5 +492,25 @@
     ],
     "ai_summary": "This plan focuses on enhancing concentration through structured mindfulness activities tailored specifically to improve focus. Each activity promotes sustained attention and clarity while breaking away from multitasking habits.",
     "saved_at": 1762819344
+  },
+  {
+    "goal": "improve focus",
+    "suggested_activities": [
+      "Start each day with a 10-minute focused breathing exercise. Sit comfortably, close your eyes, and concentrate on your breath, counting each inhalation and exhalation up to ten. If your mind wanders, gently guide it back to the breath.",
+      "Implement the Pomodoro Technique: work for 25 minutes with complete focus on a single task followed by a 5-minute break. During the break, stand up, stretch, or do a quick mindfulness exercise like observing your surroundings without judgment.",
+      "End your day with a 'Focus Reflection' session. Spend 5 minutes journaling about what helped you maintain focus during the day and what distracted you. This will help identify patterns and reinforce successful strategies."
+    ],
+    "ai_summary": "This personalized plan is designed to improve focus through structured breathing exercises, the Pomodoro Technique for time management, and reflective journaling to enhance awareness of focus-related habits.",
+    "saved_at": 1762881685
+  },
+  {
+    "goal": "Need a plan to reduce anxiety for 3 weeks",
+    "suggested_activities": [
+      "5-minute breathing exercise: Sit comfortably, close your eyes, and focus on your breath. Inhale deeply for 4 counts, hold for 4 counts, exhale for 6 counts. Repeat this cycle for five minutes every morning to start your day with calm.",
+      "Guided imagery meditation: Spend 10 minutes each afternoon imagining a peaceful scene (like a beach or forest). Use an app like Headspace or Calm to guide you through the visualization process. This will help shift your focus away from anxiety triggers during the day.",
+      "Journaling gratitude and worries: Each evening, write down three things you are grateful for and one worry that is bothering you. Address the worry by noting actionable steps you can take or simply acknowledge it without judgment. This practice helps in reducing anxiety by promoting positive thinking."
+    ],
+    "ai_summary": "This tailored plan includes daily mindfulness practices focused on breath awareness, guided visualization, and reflective journaling specifically aimed at reducing anxiety over three weeks.",
+    "saved_at": 1762884152
   }
 ]

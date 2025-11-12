@@ -15,8 +15,6 @@ from .schemas import (
 
 
 from datetime import datetime, time
-import random
-import hashlib
 from .schemas import DayAdjustment
 from services.llm import client, MODEL
 
@@ -24,6 +22,58 @@ from pydantic import ValidationError
 import logging
 
 log = logging.getLogger(__name__)
+
+def _clip01(x) -> float:
+    try:
+        x = float(x)
+    except Exception:
+        return 0.0
+    return max(0.0, min(1.0, x))
+
+def _extract_llm_conf(d: dict, key: str = "confidence") -> Optional[float]:
+    """Pull a 0..1 confidence if present & sane."""
+    if not isinstance(d, dict):
+        return None
+    v = d.get(key, None)
+    if v is None:
+        return None
+    try:
+        return _clip01(v)
+    except Exception:
+        return None
+
+_TIME_24 = re.compile(r"^([01]?\d|2[0-3]):[0-5]\d$")
+
+def _heuristic_conf_list(items: List[str], min_ok: int = 3, max_ok: int = 6) -> float:
+    """Simple heuristic: more valid, varied items = higher confidence."""
+    if not items:
+        return 0.15
+    n = len(items)
+    score = 0.4
+    # count “looks like time — ...”
+    time_hits = 0
+    for s in items:
+        s = (s or "").strip()
+        # expect 'HH:MM —'
+        parts = s.split("—", 1)
+        if parts and _TIME_24.match(parts[0].strip()):
+            time_hits += 1
+    score += 0.15 * min(time_hits, 3)  # up to +0.45 across 3 timed items
+    if min_ok <= n <= max_ok:
+        score += 0.15
+    return _clip01(score)
+
+def _heuristic_conf_subgoals(subgoals: List["SubGoal"]) -> float:
+    if not subgoals:
+        return 0.2
+    n = len(subgoals)
+    activity_density = sum(len(sg.activities or []) for sg in subgoals) / max(1, n)
+    score = 0.35
+    if 3 <= n <= 6:
+        score += 0.2
+    score += 0.05 * min(activity_density, 6)  # reward populated milestones
+    return _clip01(score)
+
 
 def _to_list(value):
     """Coerce arbitrary JSON-ish values into List[str]."""
@@ -202,7 +252,7 @@ def _create_unique_seed(goal_name: str, description: str) -> str:
     return hash_obj.hexdigest()[:8]
 
 def generate_plan_node(state: Dict[str, Any]) -> Dict[str, Any]:
-    """Generate a mindfulness plan with unique activities."""
+    """Generate a mindfulness plan with unique activities (now with confidence)."""
     goal_name = state["goal_name"]
     duration_type = state["duration_type"]
     description = state.get("description", "")
@@ -213,29 +263,38 @@ def generate_plan_node(state: Dict[str, Any]) -> Dict[str, Any]:
     system = (
         "You are a creative, evidence-informed mindfulness coach for corporate employees. "
         "You provide diverse, personalized mindfulness plans in JSON format. "
+        "Always respond with valid JSON containing: "
+        "'activities' (array of 3-5 strings) and 'summary' (string). "
         "IMPORTANT: Generate unique, specific activities tailored to the user's exact goal. "
         "Consider the user's specific context and create a truly customized plan. "
-        "Always respond with valid JSON containing 'activities' (array of strings) and 'summary' (string)."
+        "OPTIONAL (if you can estimate): include "
+        "'confidence' (float 0..1: how confident you are this plan is appropriate) and "
+        "'confidence_note' (short reason for your confidence)."
     )
     
     user_prompt = (
         f'User\'s Specific Goal: "{goal_name}"\n'
         f"Practice Frequency: {duration_type}\n"
     )
-    
     if description:
         user_prompt += f"User's Situation: {description}\n"
-    
     user_prompt += (
         "\n⚠️ CRITICAL: Create a plan SPECIFICALLY for this goal.\n"
         "Do NOT give generic mindfulness advice.\n\n"
         "Response format:\n"
         '{\n'
         '  "activities": ["Activity 1", "Activity 2", "Activity 3"],\n'
-        '  "summary": "Brief explanation"\n'
+        '  "summary": "Brief explanation",\n'
+        '  "confidence": 0.72,                // optional\n'
+        '  "confidence_note": "Reason..."     // optional\n'
         '}\n\n'
         f"Session: {unique_seed}-{timestamp}\n"
     )
+
+    activities: List[str] = []
+    summary: str = ""
+    confidence: Optional[float] = None
+    confidence_note: str = ""
 
     try:
         resp = client.chat.completions.create(
@@ -249,16 +308,15 @@ def generate_plan_node(state: Dict[str, Any]) -> Dict[str, Any]:
             max_tokens=600,
             presence_penalty=0.6,
             frequency_penalty=0.6,
-            response_format={"type": "json_object"}
+            response_format={"type": "json_object"},
         )
 
         content = resp.choices[0].message.content or ""
-        
         try:
             data = json.loads(content)
+
+            # activities
             raw_activities = data.get('activities', [])
-            summary = data.get('summary', '')
-            
             activities = []
             for item in raw_activities:
                 if isinstance(item, str):
@@ -275,28 +333,47 @@ def generate_plan_node(state: Dict[str, Any]) -> Dict[str, Any]:
                                 break
                 else:
                     activities.append(str(item))
-            
+
+            # summary
+            summary = data.get('summary', '') or ''
+
+            # confidence (optional from LLM)
+            confidence = _extract_llm_conf(data)  # uses your global helper
+            confidence_note = (data.get("confidence_note") or "").strip()
+
         except json.JSONDecodeError:
+            # Fallback parse for free-form text
             activities, summary = _parse_structured_response(content)
 
+        # Ensure minimum viable output
         if not activities or len(activities) < 3:
             activities = _get_fallback_activities(duration_type)
-        
         if not summary:
             summary = _get_fallback_summary(duration_type)
 
+        # Heuristic confidence if LLM didn't provide one
+        if confidence is None:
+            confidence = _heuristic_conf_list(activities, min_ok=3, max_ok=5)
+
+        # Normalize activities
         activities = [str(act).strip() for act in activities if act][:5]
 
     except Exception as e:
-        print(f"Error generating plan: {e}")
+        log.warning("Error generating plan: %s", e)
         activities = _get_fallback_activities(duration_type)
         summary = _get_fallback_summary(duration_type)
-    
+        # conservative confidence when fully fallback
+        confidence = _heuristic_conf_list(activities, min_ok=3, max_ok=5)
+        confidence_note = ""
+
     return {
         **state,
         "activities": activities,
-        "summary": summary.strip()
+        "summary": summary.strip(),
+        "confidence": confidence,            # float 0..1
+        "confidence_note": confidence_note,  # may be ""
     }
+
 
 def _fallback_subgoals(goal: Goal, total_count: int = 3) -> List[SubGoal]:
     """Generate meaningful fallback subgoals SPECIFIC to the goal."""
@@ -356,7 +433,7 @@ def generate_decomposed_plan(goal: Goal, base: PlanResponse) -> DecomposedPlan:
     Create milestone plan with FAST generation and goal-specific activities.
     OPTIMIZED: Reduced token count and simplified prompt for faster response.
     """
-    
+
     # 1) Infer horizon
     inferred = _infer_horizon_from_goal_text(goal.goal_name or "")
     if inferred:
@@ -409,13 +486,28 @@ ID: {unique_seed}
         )
         text = chat.choices[0].message.content.strip()
     except Exception as e:
-        print(f"Error in decomposition: {e}")
-        return DecomposedPlan(
-            goal=goal.goal_name,
-            subgoals=_fallback_subgoals(goal, total_count),
-            duration_type=goal.duration_type,
-            ai_summary=f"A progressive plan specifically designed to help you achieve: {goal.goal_name}"
-        )
+        log.warning("Error in decomposition: %s", e)
+        # Fallback subgoals + confidence (heuristic)
+        fb_subgoals = _fallback_subgoals(goal, total_count)
+        fb_conf = _heuristic_conf_subgoals(fb_subgoals)
+        fb_note = "Confidence estimated from milestone count and activity density."
+        try:
+            return DecomposedPlan(
+                goal=goal.goal_name,
+                subgoals=fb_subgoals,
+                duration_type=goal.duration_type,
+                ai_summary=f"A progressive plan specifically designed to help you achieve: {goal.goal_name}",
+                confidence=fb_conf,
+                confidence_note=fb_note,
+            )
+        except TypeError:
+            # If your schema doesn't have confidence fields
+            return DecomposedPlan(
+                goal=goal.goal_name,
+                subgoals=fb_subgoals,
+                duration_type=goal.duration_type,
+                ai_summary=f"A progressive plan specifically designed to help you achieve: {goal.goal_name}",
+            )
 
     # 3) Quick parsing
     blocks: List[Tuple[str, List[str]]] = []
@@ -468,7 +560,7 @@ ID: {unique_seed}
     # 5) Build SubGoals (simplified deduplication for speed)
     subgoals: List[SubGoal] = []
     all_activities_lower = set()
-    
+
     for i, (title, acts) in enumerate(blocks, start=1):
         # Quick deduplication
         unique = []
@@ -477,15 +569,15 @@ ID: {unique_seed}
             if a2 and a2.lower() not in all_activities_lower:
                 unique.append(a2)
                 all_activities_lower.add(a2.lower())
-        
+
         # Use smart fallbacks if needed (but prefer LLM output)
         if len(unique) < 3:
             # Get goal-specific fallback activities
             goal_lower = goal.goal_name.lower()
-            
+
             # Define specific activities based on goal type and week
             fallback_activities = []
-            
+
             if "mindfulness" in goal_lower or "plan" in goal_lower:
                 fallback_activities = [
                     [f"Morning mindfulness meditation ({5*i} minutes)", 
@@ -547,10 +639,10 @@ ID: {unique_seed}
                      f"Make your practice automatic and effortless",
                      f"Share your progress with others or mentor someone"],
                 ]
-            
+
             # Get activities for this week (cycle through if needed)
             week_activities = fallback_activities[min(i-1, len(fallback_activities)-1)]
-            
+
             # Add missing activities
             for filler in week_activities:
                 if len(unique) >= 5:
@@ -573,15 +665,30 @@ ID: {unique_seed}
         f"Progressive {total_count}-{horizon_unit} plan for '{goal.goal_name}'"
     )
 
-    return DecomposedPlan(
-        goal=goal.goal_name, 
-        subgoals=subgoals,
-        duration_type=goal.duration_type,
-        ai_summary=ai_summary,
-    )
+    # --- NEW: confidence (no behavior change to your plan logic) ---
+    conf = _heuristic_conf_subgoals(subgoals)
+    conf_note = "Confidence estimated from number of milestones and activity density."
+
+    try:
+        return DecomposedPlan(
+            goal=goal.goal_name, 
+            subgoals=subgoals,
+            duration_type=goal.duration_type,
+            ai_summary=ai_summary,
+            confidence=conf,
+            confidence_note=conf_note,
+        )
+    except TypeError:
+        # If your DecomposedPlan schema doesn't have confidence fields, fall back to original return
+        return DecomposedPlan(
+            goal=goal.goal_name, 
+            subgoals=subgoals,
+            duration_type=goal.duration_type,
+            ai_summary=ai_summary,
+        )
+
 
 #Profile personalisation and Workload adaptation
-# --- add near top of nodes.py if not present ---
 
 
 # HH or H, optional :MM, optional am/pm
@@ -792,7 +899,6 @@ def personalize_plan_node(state: Dict[str, Any]) -> Dict[str, Any]:
       - p_summary: str
       - source: "LLM" | "fallback"
     """
-    import random, uuid
 
     goal_name = state["goal_name"]
     duration_type = state["duration_type"]
@@ -886,14 +992,6 @@ Return ONLY a JSON object like:
     summary  = (data.get("summary") or "").strip()
 
     items = _clean_items(timeline)
-    source = "LLM" if len(items) >= 3 else "fallback"
-
-    # Log to your terminal so you can see the path used
-    print(
-        f"[ProfilePersonalization] Source={source.upper()} | "
-        f"Goal='{goal_name}' | Schedule='{sched}' | Stress={stress} | "
-        f"Prefs={prefs_list} | Constraints={cons_list}"
-    )
 
     # If model gave too little or nothing, use deterministic timeline (your existing helper)
     if len(items) < 3:
@@ -914,7 +1012,6 @@ Return ONLY a JSON object like:
         **state,
         "p_activities": items[:6],
         "p_summary": summary or "A personalized timeline for your schedule.",
-        "source": source,
     }
 
 
@@ -1085,24 +1182,20 @@ def adapt_plan_node(state: Dict[str, Any]) -> Dict[str, Any]:
                 dur_txt = f"{int(dur)}-min " if isinstance(dur, int) else ""
                 adapted_plan.append(f"{t} — {dur_txt}{lab}. {ins}".strip())
         adapted_rationale = (data.get("rationale") or "").strip()
-        if len(adapted_plan) >= 2:
-            source = "LLM"
     except Exception:
         # fall through to deterministic
         pass
 
     # -------------------- deterministic fallback --------------------
-    if source != "LLM":
+    # if the model didn’t give enough to use, fall back
+    if len(adapted_plan) < 2:
         adapted_plan, adapted_rationale = _fallback_plan(workload)
 
-    # helpful console line so you can see which path was used
-    print(f"[WorkloadAdaptation] source={source} busy={busy} meetings={meetings} fatigue={fatigue} blockers={blockers}")
 
     return {
         **state,
         "adapted_plan": adapted_plan[:5],
         "adapted_rationale": adapted_rationale or "Adjusted to match today's workload.",
-        "adapted_source": source,
     }
 
 
