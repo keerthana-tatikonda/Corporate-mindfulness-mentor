@@ -642,5 +642,18 @@
     "confidence": 0.85,
     "confidence_note": "The activities are evidence-based techniques known for reducing stress when practiced consistently.",
     "saved_at": 1763008061
+  },
+  {
+    "goal": "Need a plan to reduce anxiety for 3 weeks",
+    "suggested_activities": [
+      "5-minute box breathing exercise before your first meeting",
+      "10-minute mindful walk during lunch break",
+      "3-minute desk stretching routine mid-afternoon",
+      "5-minute body scan meditation before leaving work"
+    ],
+    "ai_summary": "A structured daily routine combining breathwork, movement, and mindfulness to build stress resilience.",
+    "confidence": 0.55,
+    "confidence_note": "Fallback plan; confidence estimated heuristically.",
+    "saved_at": 1763008564
   }
 ]
