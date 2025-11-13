@@ -13,6 +13,8 @@ class PlanResponse(BaseModel):
     goal: str
     suggested_activities: List[str]
     ai_summary: str
+    confidence: Optional[float] = None
+    confidence_note: Optional[str] = ""
 
 class SubGoal(BaseModel):
     """One milestone in the decomposed plan."""
@@ -26,6 +28,8 @@ class DecomposedPlan(BaseModel):
     duration_type: str               # "daily" | "weekly" | "monthly"
     subgoals: List[SubGoal]
     ai_summary: str
+    confidence: Optional[float] = None          # <— add
+    confidence_note: Optional[str] = None 
 # --- Morning Check-In (additive) ---
 from typing import Optional, List
 from pydantic import BaseModel

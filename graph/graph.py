@@ -1,6 +1,6 @@
 # graph/graph.py
 from langgraph.graph import StateGraph, END
-from typing import TypedDict, List
+from typing import TypedDict, List, Optional
 from .schemas import (
     Goal, PlanResponse, DecomposedPlan,
     UserProfile, PersonalizedPlanRequest, PersonalizedPlanResponse,
@@ -19,6 +19,8 @@ class GoalState(TypedDict):
     description: str
     activities: List[str]
     summary: str
+    confidence: Optional[float]
+    confidence_note: Optional[str]
 
 
 def create_goal_graph():
@@ -42,12 +44,18 @@ def run_goal_creation(goal_name: str, duration_type: str, description: str = "")
         "duration_type": duration_type,
         "description": description,
         "activities": [],
-        "summary": ""
+        "summary": "",
+        # 👇 seed confidence fields so they stay in the graph state
+        "confidence": None,
+        "confidence_note": None,
     })
+
     return PlanResponse(
         goal=result["goal_name"],
         suggested_activities=result["activities"],
-        ai_summary=result["summary"]
+        ai_summary=result["summary"],
+        confidence=result.get("confidence"),
+        confidence_note=result.get("confidence_note"),
     )
 
 

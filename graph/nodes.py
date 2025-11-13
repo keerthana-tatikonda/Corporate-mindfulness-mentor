@@ -282,12 +282,12 @@ def generate_plan_node(state: Dict[str, Any]) -> Dict[str, Any]:
         "\n⚠️ CRITICAL: Create a plan SPECIFICALLY for this goal.\n"
         "Do NOT give generic mindfulness advice.\n\n"
         "Response format:\n"
-        '{\n'
+        "{\n"
         '  "activities": ["Activity 1", "Activity 2", "Activity 3"],\n'
         '  "summary": "Brief explanation",\n'
-        '  "confidence": 0.72,                // optional\n'
-        '  "confidence_note": "Reason..."     // optional\n'
-        '}\n\n'
+        '  "confidence": 0.72,\n'
+        '  "confidence_note": "Reason..."\n'
+        "}\n\n"
         f"Session: {unique_seed}-{timestamp}\n"
     )
 
@@ -338,7 +338,7 @@ def generate_plan_node(state: Dict[str, Any]) -> Dict[str, Any]:
             summary = data.get('summary', '') or ''
 
             # confidence (optional from LLM)
-            confidence = _extract_llm_conf(data)  # uses your global helper
+            confidence = _extract_llm_conf(data)
             confidence_note = (data.get("confidence_note") or "").strip()
 
         except json.JSONDecodeError:
@@ -354,6 +354,8 @@ def generate_plan_node(state: Dict[str, Any]) -> Dict[str, Any]:
         # Heuristic confidence if LLM didn't provide one
         if confidence is None:
             confidence = _heuristic_conf_list(activities, min_ok=3, max_ok=5)
+            if not confidence_note:
+                confidence_note = "Estimated from activity count, structure, and specificity."
 
         # Normalize activities
         activities = [str(act).strip() for act in activities if act][:5]
@@ -364,14 +366,21 @@ def generate_plan_node(state: Dict[str, Any]) -> Dict[str, Any]:
         summary = _get_fallback_summary(duration_type)
         # conservative confidence when fully fallback
         confidence = _heuristic_conf_list(activities, min_ok=3, max_ok=5)
-        confidence_note = ""
+        if not confidence_note:
+            confidence_note = "Fallback plan; confidence estimated heuristically."
+
+    # Final safety: coerce/clip confidence to 0..1
+    try:
+        confidence = _clip01(confidence) if confidence is not None else None
+    except Exception:
+        confidence = None
 
     return {
         **state,
         "activities": activities,
         "summary": summary.strip(),
-        "confidence": confidence,            # float 0..1
-        "confidence_note": confidence_note,  # may be ""
+        "confidence": confidence,            # float 0..1 or None
+        "confidence_note": (confidence_note or "").strip(),
     }
 
 
