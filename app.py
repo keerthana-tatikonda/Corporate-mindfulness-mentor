@@ -6,18 +6,38 @@ import streamlit as st
 import pandas as pd
 import altair as alt
 
+# Page config MUST be first Streamlit command
+st.set_page_config(
+    page_title="Corporate Mindfulness Mentor",
+    page_icon="🧘",
+    layout="centered",
+)
+
 from graph.graph import run_goal_creation, run_goal_decomposition
 from services.llm import MODEL
 from services.storage import save_plan
 from services.break_agent import auto_mindfulness_reminder
+from services.checkin_storage import save_checkin, load_checkins
+from services.productivity_storage import save_productivity, load_productivity
+
 from graph.break_graph import run_break_workflow
 from graph.break_graph import run_llm_break_workflow
 from graph.schemas import CheckIn
-#profilepersonalisation and Workload adaptation
-from graph.graph import run_personalized_goal, run_workload_adaptation
+# profile personalisation and Workload adaptation
+from graph.graph import (
+    run_personalized_goal,
+    run_workload_adaptation,
+    run_morning_checkin,
+    run_stress_analytics,
+    run_productivity_insights,
+)
 
-from graph.graph import run_morning_checkin
-from services.session import init_session, start_session, stop_session, next_step, get_state
+from services.session import (
+    init_session,
+    get_state,
+    next_step,
+    stop_session,
+)
 from services.langgraph_agent import run_mentor_cycle
 
 try:
@@ -28,13 +48,16 @@ except Exception:
 
 
 # --- UI helper: provenance + confidence chip -----------------
-# app.py
 def render_confidence(provenance: str | None, confidence: float | None, key: str):
-    # Only display model-provided confidence; no provenance labels
+    """
+    Display model confidence for a result (0–1) as a small chip + progress bar.
+    Provenance is accepted for compatibility but not used here.
+    """
     if confidence is None:
-        return  # nothing to show if the model didn't produce it
+        return  # nothing to show if the model didn't provide it
 
     pct = int(max(0, min(100, round(confidence * 100))))
+
     st.markdown(
         f"""
         <div style="display:flex;align-items:center;gap:.5rem;margin:.5rem 0 .25rem 0;">
@@ -46,20 +69,181 @@ def render_confidence(provenance: str | None, confidence: float | None, key: str
         """,
         unsafe_allow_html=True,
     )
-    st.progress(pct, text="")
+    st.progress(pct, text="Model confidence")
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Page Setup
-# ──────────────────────────────────────────────────────────────────────────────
-st.set_page_config(
-    page_title="Corporate Mindfulness Mentor",
-    page_icon="🧘",
-    layout="centered",
-)
+# --- Helpers for Stress-Level Tracking Dashboard -------------
+def _score_stress_from_checkin(entry: dict) -> float:
+    """
+    Turn one saved check-in entry into a numeric stress score (0–100)
+    using mood, sleep quality, energy, and workload.
+    """
+    c = (entry or {}).get("checkin") or {}
+
+    mood_map = {
+        "calm": 0.1,
+        "neutral": 0.4,
+        "anxious": 0.7,
+        "frustrated": 1.0,
+    }
+    sleep_map = {
+        "great": 0.1,
+        "ok": 0.4,
+        "poor": 0.8,
+    }
+    energy_map = {
+        "high": 0.1,
+        "medium": 0.4,
+        "low": 0.8,
+    }
+    workload_map = {
+        "light": 0.2,
+        "normal": 0.5,
+        "heavy": 0.9,
+    }
+
+    mood = c.get("mood") or ""
+    sleep = c.get("sleep_quality") or ""
+    energy = c.get("energy") or ""
+    workload = c.get("workload") or ""
+
+    m = mood_map.get(mood, 0.5)
+    s = sleep_map.get(sleep, 0.4)
+    e = energy_map.get(energy, 0.4)
+    w = workload_map.get(workload, 0.5)
+
+    raw = (m + s + e + w) / 4.0
+    return round(raw * 100, 1)
+
+
+def build_stress_dataframe(raw_checkins: list) -> pd.DataFrame:
+    """
+    Build a DataFrame with:
+      - date: datetime64
+      - stress_score: float (0–100)
+      - mood, sleep_quality, energy, workload
+    """
+    rows = []
+    for item in raw_checkins:
+        c = (item or {}).get("checkin") or {}
+        ts = item.get("saved_at")
+
+        # saved_at is epoch seconds in your checkin_storage.py
+        try:
+            if isinstance(ts, (int, float)):
+                dt = datetime.fromtimestamp(ts)
+            else:
+                dt = datetime.fromisoformat(str(ts))
+        except Exception:
+            dt = datetime.utcnow()
+
+        rows.append(
+            {
+                "date": dt.date(),
+                "stress_score": _score_stress_from_checkin(item),
+                "mood": c.get("mood") or "unknown",
+                "sleep_quality": c.get("sleep_quality") or "unknown",
+                "energy": c.get("energy") or "unknown",
+                "workload": c.get("workload") or "unknown",
+            }
+        )
+
+    if not rows:
+        return pd.DataFrame(
+            columns=[
+                "date",
+                "stress_score",
+                "mood",
+                "sleep_quality",
+                "energy",
+                "workload",
+            ]
+        )
+
+    df = pd.DataFrame(rows)
+    df["date"] = pd.to_datetime(df["date"])
+    df = df.sort_values("date")
+
+    # For weekly aggregation
+    df["week_start"] = df["date"].dt.to_period("W").apply(lambda r: r.start_time.date())
+    return df
+
+
+def build_productivity_dataframe(raw_entries: list) -> pd.DataFrame:
+    """
+    Build a DataFrame with:
+      - date: datetime64
+      - productivity: float (0–10 or whatever scale you use)
+      - prod_notes: notes for tooltip context
+    """
+    rows = []
+    for item in raw_entries:
+        date_str = str(item.get("date") or "")
+        notes = item.get("notes") or ""
+        ts = item.get("saved_at")
+
+        # Try to parse the date, fall back to saved_at timestamp
+        try:
+            if date_str:
+                dt = datetime.fromisoformat(date_str)
+            elif isinstance(ts, (int, float)):
+                dt = datetime.fromtimestamp(ts)
+            else:
+                dt = datetime.utcnow()
+        except Exception:
+            dt = datetime.utcnow()
+
+        rows.append(
+            {
+                "date": dt.date(),
+                "productivity": float(item.get("productivity") or 0.0),
+                "prod_notes": notes,
+            }
+        )
+
+    if not rows:
+        return pd.DataFrame(columns=["date", "productivity", "prod_notes"])
+
+    df = pd.DataFrame(rows)
+    df["date"] = pd.to_datetime(df["date"])
+    df = df.sort_values("date")
+    return df
+
+
+def build_stress_productivity_join(
+    df_stress: pd.DataFrame, df_prod: pd.DataFrame
+) -> pd.DataFrame:
+    """
+    Inner-join stress and productivity on date, so we only keep days
+    where both were recorded.
+    """
+    if df_stress.empty or df_prod.empty:
+        return pd.DataFrame(
+            columns=[
+                "date",
+                "stress_score",
+                "productivity",
+                "mood",
+                "sleep_quality",
+                "energy",
+                "workload",
+                "prod_notes",
+            ]
+        )
+
+    df_s = df_stress.copy()
+    df_p = df_prod.copy()
+    df_s["date"] = df_s["date"].dt.date
+    df_p["date"] = df_p["date"].dt.date
+
+    joined = pd.merge(df_s, df_p, on="date", how="inner")
+    joined["date"] = pd.to_datetime(joined["date"])
+    return joined
+
 
 # Readable card style for plan summary (works in light/dark)
-st.markdown("""
+st.markdown(
+    """
 <style>
 .plan-card {
   padding: 18px 20px;
@@ -78,8 +262,9 @@ st.markdown("""
 }
 .plan-card p { margin: 0 0 .7rem 0; }
 </style>
-""", unsafe_allow_html=True)
-
+""",
+    unsafe_allow_html=True,
+)
 
 
 # ──────────────────────────────────────────────────────────────
@@ -87,9 +272,10 @@ st.markdown("""
 # ──────────────────────────────────────────────────────────────
 with st.sidebar:
     st.header("🧘 Mindful Break Settings")
-    enable_auto_breaks = st.checkbox("Enable automatic reminders", value=True, key="auto_breaks_toggle")
+    enable_auto_breaks = st.checkbox(
+        "Enable automatic reminders", value=True, key="auto_breaks_toggle"
+    )
     play_sound = st.checkbox("🔔 Sound alert", value=True, key="sound_alert_toggle")
-
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -109,7 +295,9 @@ def init_session_state():
     if "decomposition" not in st.session_state:
         st.session_state["decomposition"] = None
 
+
 init_session_state()
+
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Persistence Helpers
@@ -133,11 +321,13 @@ def save_plan_to_history(goal_name: str, duration_type: str, result):
     st.session_state["current_goal_id"] = goal_id
     return goal_id
 
+
 def load_plan_from_history(goal_id: str):
     """Load a plan from session history."""
     if goal_id in st.session_state["saved_plans"]:
         plan = st.session_state["saved_plans"][goal_id]
         from graph.schemas import PlanResponse
+
         return PlanResponse(
             goal=plan["name"],
             suggested_activities=plan["activities"],
@@ -145,9 +335,11 @@ def load_plan_from_history(goal_id: str):
         )
     return None
 
+
 def export_all_plans_json():
     """Export all saved plans as JSON."""
     return json.dumps(st.session_state["saved_plans"], indent=2)
+
 
 def export_plan_markdown(plan_data):
     """Export a single plan to Markdown."""
@@ -165,8 +357,9 @@ def export_plan_markdown(plan_data):
     md += f"\n## 📝 Summary\n\n{plan_data['summary']}\n"
     return md
 
+
 # ──────────────────────────────────────────────────────────────────────────────
-# UI: Title & Sidebar (CLEANED UP)
+# UI: Title & Sidebar (Goal Creation FIRST)
 # ──────────────────────────────────────────────────────────────────────────────
 st.title("🧘‍♀️ Corporate Mindfulness Mentor")
 st.subheader("Goal Creation & Personalized Plan")
@@ -176,26 +369,30 @@ with st.sidebar:
     st.markdown("### 📊 Your Progress")
     total_plans = len(st.session_state["goal_history"])
     st.metric("Total Plans Created", total_plans)
-    
+
     # Only show API status if there's an issue
     if not os.getenv("OPENAI_API_KEY"):
         st.error("⚠️ API Key Missing")
         st.caption("Please add OPENAI_API_KEY to your .env file")
-    
+
     st.markdown("---")
 
     # Goal History (user-friendly)
     if st.session_state["goal_history"]:
         st.markdown("### 📚 Previous Goals")
-        
+
         for plan in reversed(st.session_state["goal_history"][-10:]):
             with st.expander(f"📋 {plan['name'][:35]}...", expanded=False):
                 st.caption(f"Created: {plan['timestamp']}")
                 st.caption(f"Duration: {plan['duration'].title()}")
-                
+
                 col1, col2 = st.columns(2)
                 with col1:
-                    if st.button("📖 Load", key=f"load_{plan['id']}", use_container_width=True):
+                    if st.button(
+                        "📖 Load",
+                        key=f"load_{plan['id']}",
+                        use_container_width=True,
+                    ):
                         loaded_plan = load_plan_from_history(plan["id"])
                         if loaded_plan:
                             st.session_state["result"] = loaded_plan
@@ -215,7 +412,7 @@ with st.sidebar:
                     )
 
         st.markdown("---")
-        
+
         # Export all option
         col1, col2 = st.columns([2, 1])
         with col1:
@@ -231,16 +428,20 @@ with st.sidebar:
             )
 
     st.markdown("---")
-    
+
     # Reset button
-    if st.button("🔄 Start Fresh", help="Clear all saved plans", use_container_width=True):
+    if st.button(
+        "🔄 Start Fresh",
+        help="Clear all saved plans",
+        use_container_width=True,
+    ):
         if st.session_state["goal_history"]:
-            # Show confirmation
             st.session_state.clear()
             st.rerun()
 
+
 # ──────────────────────────────────────────────────────────────────────────────
-# Main Form
+# Main Form – Goal Creation
 # ──────────────────────────────────────────────────────────────────────────────
 with st.form("goal_form", clear_on_submit=False):
     goal_name = st.text_input(
@@ -262,16 +463,26 @@ with st.form("goal_form", clear_on_submit=False):
     description = st.text_area(
         "Additional context (optional)",
         value="",
-        placeholder="Share details about your schedule, work environment, or specific challenges...",
+        placeholder=(
+            "Share details about your schedule, work environment, or "
+            "specific challenges..."
+        ),
         help="More context helps us create a better personalized plan",
         height=100,
     )
 
     col_btn1, col_btn2 = st.columns(2)
     with col_btn1:
-        submitted = st.form_submit_button("✨ Generate My Plan", use_container_width=True, type="primary")
+        submitted = st.form_submit_button(
+            "✨ Generate My Plan",
+            use_container_width=True,
+            type="primary",
+        )
     with col_btn2:
-        decompose_request = st.form_submit_button("📅 Break Into Steps", use_container_width=True)
+        decompose_request = st.form_submit_button(
+            "📅 Break Into Steps",
+            use_container_width=True,
+        )
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Handle Form Actions
@@ -296,7 +507,6 @@ if submitted:
 
             st.session_state["result"] = result
 
-        
             st.session_state["last_input"] = {
                 "goal_name": goal_name.strip(),
                 "duration_type": duration_type,
@@ -321,24 +531,31 @@ if submitted:
 
 if decompose_request:
     if st.session_state.get("result") is None:
-        st.info("💡 First, generate a plan, then you can break it into weekly steps!")
+        st.info(
+            "💡 First, generate a plan, then you can break it into weekly steps!"
+        )
     else:
         li = st.session_state.get("last_input") or {}
         try:
-              li = st.session_state.get("last_input") or {}
-              cadence = li.get("duration_type", "weekly")  # "daily" | "weekly" | "monthly"
-              with st.spinner(f"🔄 Breaking your goal into {cadence} milestones..."):
-                  dec = run_goal_decomposition(
-                      goal_name=li.get("goal_name", st.session_state["result"].goal),
-                      duration_type=cadence,
-                      description=li.get("description", ""),
-                  )
-              st.session_state["decomposition"] = dec
-              st.success(f"✅ Your {cadence.title()} roadmap is ready!")
+            li = st.session_state.get("last_input") or {}
+            cadence = li.get("duration_type", "weekly")  # "daily" | "weekly" | "monthly"
+            with st.spinner(
+                f"🔄 Breaking your goal into {cadence} milestones..."
+            ):
+                dec = run_goal_decomposition(
+                    goal_name=li.get(
+                        "goal_name",
+                        st.session_state["result"].goal,
+                    ),
+                    duration_type=cadence,
+                    description=li.get("description", ""),
+                )
+            st.session_state["decomposition"] = dec
+            st.success(f"✅ Your {cadence.title()} roadmap is ready!")
         except Exception as e:
             st.error("😔 Couldn't create weekly breakdown.")
             st.caption(f"Error: {str(e)}")
-      
+
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Display Decomposition (Milestones)
@@ -349,18 +566,18 @@ if dec:
     title_cadence = (dec.duration_type or "weekly").title()
     st.markdown(f"## 📅 Your {title_cadence} Roadmap")
     st.caption("Here's how to achieve your goal step by step")
-    
+
     for idx, sg in enumerate(dec.subgoals, start=1):
         title = getattr(sg, "title", "This Week's Focus")
         timeframe = getattr(sg, "timeframe", f"Week {idx}")
         activities = getattr(sg, "activities", []) or []
-        
+
         with st.expander(f"**{timeframe}: {title}**", expanded=(idx == 1)):
             st.markdown("**Activities for this period:**")
             for i, activity in enumerate(activities, 1):
                 st.markdown(f"{i}. {activity}")
-    
-    if hasattr(dec, 'ai_summary') and dec.ai_summary:
+
+    if hasattr(dec, "ai_summary") and dec.ai_summary:
         st.markdown("---")
         st.markdown("### 🌱 Why This Sequence?")
         st.info(dec.ai_summary)
@@ -368,13 +585,16 @@ if dec:
     render_confidence(
         provenance=None,
         confidence=getattr(dec, "confidence", None),
-        key="decomposition_conf"
+        key="decomposition_conf",
     )
     note = getattr(dec, "confidence_note", None)
     if note:
         st.caption(f"Confidence note: {note}")
 
 
+# ──────────────────────────────────────────────────────────────────────────────
+# Display Main Plan (Activities & Summary)
+# ──────────────────────────────────────────────────────────────────────────────
 # ──────────────────────────────────────────────────────────────────────────────
 # Display Main Plan (Activities & Summary)
 # ──────────────────────────────────────────────────────────────────────────────
@@ -391,28 +611,76 @@ if result:
     if plan_conf_note:
         st.caption(f"Confidence note: {plan_conf_note}")
 
-    
     current_id = st.session_state.get("current_goal_id")
     if current_id and current_id in st.session_state["saved_plans"]:
         st.caption(f"Saved as: {current_id}")
 
-    # Activities
+    # Activities (checkboxes)
     st.markdown("### 📋 Your Daily Practices")
     st.caption("Check off activities as you complete them")
-    
+
     for i, act in enumerate(result.suggested_activities, start=1):
-        checkbox_key = f"activity_{current_id}_{i}" if current_id else f"activity_temp_{i}"
+        checkbox_key = (
+            f"activity_{current_id}_{i}"
+            if current_id
+            else f"activity_temp_{i}"
+        )
         st.checkbox(f"**{i}.** {act}", key=checkbox_key)
+
+    # ✏️ New: Edit tasks & feedback (this is still inside `if result:`)
+    st.markdown("### ✏️ Edit Your Tasks & Give Feedback")
+    st.caption(
+        "You can rewrite any task and mark whether it’s working for you. "
+        "The updated tasks will be used in later personalization and adaptation."
+    )
+
+    edited_activities = []
+    feedback_flags = {}
+
+    for i, act in enumerate(result.suggested_activities, start=1):
+        col_e1, col_e2 = st.columns([3, 1])
+        with col_e1:
+            new_text = st.text_input(
+                f"Task {i}",
+                value=act,
+                key=f"edit_task_{i}",
+            )
+        with col_e2:
+            feedback = st.selectbox(
+                "Feedback",
+                ["no feedback", "helpful", "not helpful"],
+                index=0,
+                key=f"fb_task_{i}",
+            )
+        edited_activities.append(new_text)
+        feedback_flags[new_text] = feedback
+
+    if st.button("💾 Save edits & update plan"):
+        # 1) Update the result in session with edited tasks
+        result.suggested_activities = edited_activities
+        st.session_state["result"] = result
+
+        # 2) If a personalized plan exists, align it too
+        if "personalized" in st.session_state and st.session_state["personalized"]:
+            try:
+                st.session_state["personalized"].activities = edited_activities
+            except Exception:
+                pass
+
+        # 3) Track feedback for potential use in analytics / future prompts
+        st.session_state["task_feedback"] = feedback_flags
+
+        st.success("✅ Tasks updated. Future adaptations will use your edited tasks.")
 
     # Summary
     st.markdown("---")
     st.markdown("### 💡 About Your Plan")
     clean_summary = re.sub(r"#+\s*", "", result.ai_summary or "").strip()
     html_summary = clean_summary.replace("\n", "<br>")  # preserve line breaks
-    st.markdown(f"<div class='plan-card'>{html_summary}</div>", unsafe_allow_html=True)
-
-
-
+    st.markdown(
+        f"<div class='plan-card'>{html_summary}</div>",
+        unsafe_allow_html=True,
+    )
 
     # Action buttons
     st.markdown("---")
@@ -457,10 +725,8 @@ Created with Corporate Mindfulness Mentor
                 use_container_width=True,
             )
 
-
-
 # ──────────────────────────────────────────────────────────────────────────────
-# 👤 Profile Personalization (runs after you have a base plan)
+# 👤 Profile Personalization (2nd in UI)
 # ──────────────────────────────────────────────────────────────────────────────
 st.markdown("---")
 st.markdown("## 👤 Profile Personalization")
@@ -468,11 +734,17 @@ st.markdown("## 👤 Profile Personalization")
 with st.form("profile_form", clear_on_submit=False):
     colA, colB = st.columns(2)
     with colA:
-        work_schedule = st.text_input("Work schedule", placeholder="Mon–Fri, 9–6; commute 30m")
+        work_schedule = st.text_input(
+            "Work schedule", placeholder="Mon–Fri, 9–6; commute 30m"
+        )
         typical_stress = st.slider("Typical stress (0–10)", 0, 10, 5)
     with colB:
-        prefs = st.text_input("Preferences (comma-separated)", placeholder="short sessions, breathing")
-        cons = st.text_input("Constraints (comma-separated)", placeholder="no audio, shared desk")
+        prefs = st.text_input(
+            "Preferences (comma-separated)", placeholder="short sessions, breathing"
+        )
+        cons = st.text_input(
+            "Constraints (comma-separated)", placeholder="no audio, shared desk"
+        )
 
     personalize_submit = st.form_submit_button("🎯 Personalize my plan")
 
@@ -481,16 +753,25 @@ if personalize_submit:
         st.info("Generate a goal plan first, then personalize it.")
     else:
         from graph.schemas import Goal, UserProfile
+
         g = Goal(
             goal_name=st.session_state["result"].goal,
-            duration_type=st.session_state.get("last_input",{}).get("duration_type","weekly"),
-            description=st.session_state.get("last_input",{}).get("description","")
+            duration_type=st.session_state.get("last_input", {}).get(
+                "duration_type", "weekly"
+            ),
+            description=st.session_state.get("last_input", {}).get(
+                "description", ""
+            ),
         )
         profile = UserProfile(
             work_schedule=work_schedule.strip() or "Mon–Fri",
             typical_stress_level=int(typical_stress),
-            preferences=[p.strip() for p in (prefs or "").split(",") if p.strip()],
-            constraints=[c.strip() for c in (cons or "").split(",") if c.strip()],
+            preferences=[
+                p.strip() for p in (prefs or "").split(",") if p.strip()
+            ],
+            constraints=[
+                c.strip() for c in (cons or "").split(",") if c.strip()
+            ],
         )
         try:
             with st.spinner("Tailoring your plan to your schedule..."):
@@ -503,7 +784,11 @@ if personalize_submit:
             st.markdown("### 📝 Why this fits you")
             st.info(p.summary)
             st.session_state["personalized"] = p
-            render_confidence(None, getattr(p, "confidence", None), key="profile_conf")
+            render_confidence(
+                None,
+                getattr(p, "confidence", None),
+                key="profile_conf",
+            )
             note = getattr(p, "confidence_note", None)
             if note:
                 st.caption(f"Confidence note: {note}")
@@ -511,10 +796,8 @@ if personalize_submit:
             st.error(f"Could not personalize plan: {e}")
 
 
-
-
 # ──────────────────────────────────────────────────────────────────────────────
-# ⚙️ Workload-Based Adaptation (same section, uses today’s load)
+# ⚙️ Workload-Based Adaptation (3rd in UI)
 # ──────────────────────────────────────────────────────────────────────────────
 st.markdown("## ⚙️ Workload-Based Adaptation (Today)")
 
@@ -522,12 +805,20 @@ with st.form("workload_form", clear_on_submit=False):
     col1, col2, col3 = st.columns(3)
     with col1:
         w_date = st.date_input("Date")
-        meetings = st.number_input("Meetings (count)", min_value=0, step=1, value=4)
+        meetings = st.number_input(
+            "Meetings (count)", min_value=0, step=1, value=4
+        )
     with col2:
-        busy_hours = st.number_input("Busy hours (today)", min_value=0.0, step=0.5, value=4.0)
-        fatigue = st.selectbox("Fatigue", ["", "low", "medium", "high"], index=2)
+        busy_hours = st.number_input(
+            "Busy hours (today)", min_value=0.0, step=0.5, value=4.0
+        )
+        fatigue = st.selectbox(
+            "Fatigue", ["", "low", "medium", "high"], index=2
+        )
     with col3:
-        blockers = st.text_input("Blockers (comma-separated)", placeholder="oncall, release")
+        blockers = st.text_input(
+            "Blockers (comma-separated)", placeholder="oncall, release"
+        )
     adapt_submit = st.form_submit_button("🔧 Adapt today’s plan")
 
 if adapt_submit:
@@ -535,26 +826,41 @@ if adapt_submit:
     base_acts = []
     if base:
         # both PersonalizedPlanResponse and PlanResponse have activity lists
-        base_acts = getattr(base, "activities", None) or getattr(base, "suggested_activities", None) or []
+        base_acts = (
+            getattr(base, "activities", None)
+            or getattr(base, "suggested_activities", None)
+            or []
+        )
 
     if not base_acts:
         st.info("Create or personalize a plan first, then adapt it.")
     else:
         from graph.schemas import Goal, WorkloadReport
+
         g = Goal(
-            goal_name= (getattr(base, "goal", None) or st.session_state["result"].goal),
-            duration_type=st.session_state.get("last_input",{}).get("duration_type","weekly"),
-            description=st.session_state.get("last_input",{}).get("description","")
+            goal_name=(
+                getattr(base, "goal", None)
+                or st.session_state["result"].goal
+            ),
+            duration_type=st.session_state.get("last_input", {}).get(
+                "duration_type", "weekly"
+            ),
+            description=st.session_state.get("last_input", {}).get(
+                "description", ""
+            ),
         )
         wl = WorkloadReport(
             date=w_date.isoformat(),
             meetings=int(meetings),
             busy_hours=float(busy_hours),
             fatigue=(fatigue or None),
-            blockers=[b.strip() for b in (blockers or "").split(",") if b.strip()]
+            blockers=[
+                b.strip() for b in (blockers or "").split(",") if b.strip()
+            ],
         )
         try:
             from graph.graph import run_workload_adaptation
+
             with st.spinner("Right-sizing today’s steps..."):
                 adapted = run_workload_adaptation(g, base_acts, wl)
 
@@ -567,7 +873,7 @@ if adapt_submit:
             render_confidence(
                 provenance=None,
                 confidence=getattr(adapted, "confidence", None),
-                key="adapt_conf"
+                key="adapt_conf",
             )
             note = getattr(adapted, "confidence_note", None)
             if note:
@@ -577,9 +883,8 @@ if adapt_submit:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# 🧘 Mindfulness Break Notifications (User Story)
+# 🧘 Mindfulness Break Notifications (4th in UI)
 # ──────────────────────────────────────────────────────────────────────────────
-
 st.markdown("---")
 st.markdown("## 🕒 Mindfulness Break Notifications")
 
@@ -597,17 +902,28 @@ if st.button("🤖 AI-Powered Mindful Break"):
     st.success(llm_output["reflection"])
     st.caption(f"💡 {llm_output['recommendation']}")
 
-
-
-
 # Auto reminder controls
-enable_auto_breaks = st.checkbox("Enable automatic reminders", value=True, key="auto_reminder_box")
-interval = st.slider("Remind me every (minutes)", 15, 120, 60, 15, key="interval_main_slider")
-play_sound = st.checkbox("🔔 Sound alert", value=True, key="sound_alert_box")
+enable_auto_breaks = st.checkbox(
+    "Enable automatic reminders", value=True, key="auto_reminder_box"
+)
+interval = st.slider(
+    "Remind me every (minutes)",
+    15,
+    120,
+    60,
+    15,
+    key="interval_main_slider",
+)
+play_sound = st.checkbox(
+    "🔔 Sound alert", value=True, key="sound_alert_box"
+)
 
 # Run auto reminders
 if enable_auto_breaks:
-    auto_mindfulness_reminder(interval_minutes=interval, enable_sound=play_sound)
+    auto_mindfulness_reminder(
+        interval_minutes=interval,
+        enable_sound=play_sound,
+    )
 
 # Show latest break info
 if os.path.exists("data/break_log.json"):
@@ -617,7 +933,8 @@ if os.path.exists("data/break_log.json"):
         if logs:
             latest = logs[-1]
             st.markdown(
-                f"<p style='font-size:16px;'><b>🕒 Last Break:</b> {latest['scheduled_time']} — {latest['message']}</p>",
+                f"<p style='font-size:16px;'><b>🕒 Last Break:</b> "
+                f"{latest['scheduled_time']} — {latest['message']}</p>",
                 unsafe_allow_html=True,
             )
         else:
@@ -625,7 +942,7 @@ if os.path.exists("data/break_log.json"):
     except Exception as e:
         st.error(f"Error reading break log: {e}")
 
-# Show today's break chart
+
 def show_break_chart():
     if not os.path.exists("data/break_log.json"):
         st.info("No breaks logged yet.")
@@ -646,11 +963,12 @@ def show_break_chart():
     )
     st.altair_chart(chart, use_container_width=True)
 
+
 show_break_chart()
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Footer
+# Footer (unchanged)
 # ──────────────────────────────────────────────────────────────────────────────
 st.markdown("---")
 st.markdown(
@@ -668,11 +986,9 @@ st.markdown(
 )
 
 
-
-
-
-#----break-----
-
+# ──────────────────────────────────────────────────────────────────────────────
+# 🌅 Morning Wellness Check-In (5th in UI)
+# ──────────────────────────────────────────────────────────────────────────────
 # ──────────────────────────────────────────────────────────────────────────────
 # 🌅 Morning Wellness Check-In (User Story)
 # ──────────────────────────────────────────────────────────────────────────────
@@ -700,30 +1016,249 @@ if do_checkin:
     )
     adj = run_morning_checkin(ck)
 
-    # Optional: save to disk if you decide to re-enable later
-    # from services.checkin_storage import save_checkin
-    # save_checkin(ck.model_dump(), adj.model_dump())
+    # ✅ Save check-in & adjustment for stress analytics dashboard
+    try:
+        save_checkin(ck.model_dump(), adj.model_dump())
+    except Exception as e:
+        st.warning(f"Check-in saved only for this session (storage error: {e})")
 
-    if adj.summary:
+    # 🤖 AI feedback section
+    st.markdown("### 🤖 AI Feedback on Today’s Check-In")
+    if getattr(adj, "summary", None):
         st.success(adj.summary)
 
-    if adj.focus_for_today:
+    # Optional: show model confidence if provided by the graph/LLM
+    render_confidence(
+        provenance=None,
+        confidence=getattr(adj, "confidence", None),
+        key="checkin_conf",
+    )
+    note = getattr(adj, "confidence_note", None)
+    if note:
+        st.caption(f"Confidence note: {note}")
+
+    # Focus + risk flags
+    if getattr(adj, "focus_for_today", None):
         st.markdown("**Focus for today**")
         for a in adj.focus_for_today:
             st.write(f"- {a}")
 
-    if adj.risk_flags:
+    if getattr(adj, "risk_flags", None):
         st.caption("Flags: " + ", ".join(adj.risk_flags))
 
 
+# ---------------------------------------------------------------------------
+# 📊 Monitoring & Analytics – Stress-Level Tracking Dashboard (6th)
+# ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# 📊 Monitoring & Analytics – Stress-Level Tracking Dashboard (User Story)
+# ---------------------------------------------------------------------------
+st.markdown("---")
+st.markdown("## 📊 Stress-Level Tracking Dashboard")
+
+if "load_checkins" not in globals() or load_checkins is None:
+    st.info(
+        "The stress dashboard is not configured because check-in storage "
+        "is missing. Make sure services/checkin_storage.py defines "
+        "`load_checkins` and it is imported at the top of app.py."
+    )
+else:
+    all_checkins = load_checkins()
+
+    if not all_checkins:
+        st.info(
+            "No saved Morning Wellness Check-Ins yet. "
+            "Submit a few check-ins above to see your daily and weekly "
+            "stress graphs here."
+        )
+    else:
+        df = build_stress_dataframe(all_checkins)
+        max_date = df["date"].max()
+
+        # ⏱ Time window selector (buttons instead of slider)
+        st.markdown("#### ⏱ Time Window for Daily Stress")
+        days_window = st.radio(
+            "How much recent history do you want to see?",
+            options=[7, 14, 21, 30],
+            index=1,  # default: 14 days
+            format_func=lambda x: f"{x} days",
+            help=(
+                "This controls how many days of stress check-ins are shown "
+                "in the daily stress chart below."
+            ),
+            horizontal=True,
+        )
+        st.caption(
+            "Use the buttons above to quickly switch between 1, 2, 3, or 4 weeks "
+            "of recent stress trends."
+        )
+
+        cutoff = max_date - pd.Timedelta(days=days_window - 1)
+        df_window = df[df["date"] >= cutoff]
+
+        col_daily, col_weekly = st.columns(2)
+
+        # Daily line chart
+        with col_daily:
+            st.markdown("#### 📈 Daily Stress (0–100)")
+            daily_chart = (
+                alt.Chart(df_window)
+                .mark_line(point=True)
+                .encode(
+                    x="date:T",
+                    y=alt.Y("stress_score:Q", scale=alt.Scale(domain=[0, 100])),
+                    tooltip=[
+                        "date:T",
+                        "stress_score:Q",
+                        "mood:N",
+                        "sleep_quality:N",
+                        "energy:N",
+                        "workload:N",
+                    ],
+                )
+                .properties(height=260)
+            )
+            st.altair_chart(daily_chart, use_container_width=True)
+
+        # Weekly bar chart
+        with col_weekly:
+            st.markdown("#### 📊 Weekly Average Stress")
+            weekly = (
+                df.groupby("week_start", as_index=False)["stress_score"]
+                .mean()
+                .rename(columns={"stress_score": "avg_stress"})
+            )
+            weekly_chart = (
+                alt.Chart(weekly)
+                .mark_bar()
+                .encode(
+                    x="week_start:T",
+                    y=alt.Y("avg_stress:Q", scale=alt.Scale(domain=[0, 100])),
+                    tooltip=["week_start:T", "avg_stress:Q"],
+                )
+                .properties(height=260)
+            )
+            st.altair_chart(weekly_chart, use_container_width=True)
+
+        # 🤖 AI feedback on stress trends
+        st.markdown("### 🤖 AI Feedback on Your Stress Trends")
+        with st.spinner("Analyzing your stress history..."):
+            insights = run_stress_analytics(all_checkins)
+
+        if insights:
+            st.info(insights)
+
+
+# ---------------------------------------------------------------------------
+# 📉 Productivity vs. Stress Insights (User Story)
+# ---------------------------------------------------------------------------
+st.markdown("---")
+st.markdown("## 📉 Productivity vs. Stress Insights")
+
+with st.form("productivity_form", clear_on_submit=False):
+    colp1, colp2 = st.columns(2)
+    with colp1:
+        prod_date = st.date_input("Date", value=datetime.today())
+    with colp2:
+        prod_score = st.slider(
+            "Productivity (0–10)",
+            min_value=0,
+            max_value=10,
+            value=7,
+            help="Rate how productive you felt overall during this day.",
+        )
+    prod_notes = st.text_input(
+        "Notes (optional)",
+        placeholder="e.g., Deep work in morning; many meetings; context switching, etc.",
+    )
+    prod_submitted = st.form_submit_button("Save today's productivity")
+
+if prod_submitted:
+    try:
+        save_productivity(prod_date.isoformat(), prod_score, prod_notes)
+        st.success("✅ Productivity entry saved.")
+    except Exception as e:
+        st.error(f"Could not save productivity entry: {e}")
+
+# Build dataframes from stored data
+stress_df = build_stress_dataframe(
+    load_checkins() if callable(load_checkins) else []
+)
+prod_df = build_productivity_dataframe(
+    load_productivity() if callable(load_productivity) else []
+)
+joined_df = build_stress_productivity_join(stress_df, prod_df)
+
+if joined_df.empty:
+    st.info(
+        "Log at least one Morning Wellness Check-In and one Productivity entry "
+        "on the same date to compare stress vs. performance."
+    )
+else:
+    col_scatter, col_time = st.columns(2)
+
+    # Scatter: stress vs productivity
+    with col_scatter:
+        st.markdown("#### 🔍 Daily Stress vs. Productivity")
+        scatter = (
+            alt.Chart(joined_df)
+            .mark_circle(size=80)
+            .encode(
+                x=alt.X("stress_score:Q", title="Stress (0–100)"),
+                y=alt.Y("productivity:Q", title="Productivity (0–10)"),
+                color="date:T",
+                tooltip=[
+                    "date:T",
+                    "stress_score:Q",
+                    "productivity:Q",
+                    "mood:N",
+                    "sleep_quality:N",
+                    "energy:N",
+                    "workload:N",
+                    "prod_notes:N",
+                ],
+            )
+            .properties(height=260)
+        )
+        st.altair_chart(scatter, use_container_width=True)
+
+    # Trend chart over time
+    with col_time:
+        st.markdown("#### 📆 Stress & Productivity Over Time")
+        long_df = pd.melt(
+            joined_df[["date", "stress_score", "productivity"]],
+            id_vars="date",
+            value_vars=["stress_score", "productivity"],
+            var_name="metric",
+            value_name="value",
+        )
+        trend = (
+            alt.Chart(long_df)
+            .mark_line(point=True)
+            .encode(
+                x="date:T",
+                y="value:Q",
+                color="metric:N",
+                tooltip=["date:T", "metric:N", "value:Q"],
+            )
+            .properties(height=260)
+        )
+        st.altair_chart(trend, use_container_width=True)
+
+    # 🤖 AI feedback on stress vs productivity
+    st.markdown("### 🤖 AI Feedback on Stress vs. Productivity")
+    joined_records = joined_df.to_dict(orient="records")
+    with st.spinner("Analyzing how stress is affecting your productivity..."):
+        insight_text = run_productivity_insights(joined_records)
+
+    if insight_text:
+        st.info(insight_text)
+
 # ──────────────────────────────────────────────────────────────────────────────
-# 🌬 Guided Meditations, Breathing & Body Scans (User Story 4)
+# 🌬 Guided Meditations, Breathing & Body Scans (8th / last)
 # ──────────────────────────────────────────────────────────────────────────────
 st.markdown("---")
 st.markdown("## 🌬 Guided Meditations & Breathing Exercises")
-
-
-
 
 init_session()
 
@@ -740,13 +1275,15 @@ else:
             result = run_mentor_cycle(
                 user_goal=user_goal,
                 stress_level=stress_level,
-                profile={"context": "corporate", "session_type": "guided_practice"},
+                profile={
+                    "context": "corporate",
+                    "session_type": "guided_practice",
+                },
                 history=st.session_state.get("session_history", []),
             )
 
             # 🧩 Ensure JSON is parsed
             if isinstance(result, str):
-                import json
                 try:
                     result = json.loads(result)
                 except Exception as e:
@@ -755,59 +1292,28 @@ else:
 
             # ✅ Store and display
             st.session_state["techniques"] = result.get("techniques", [])
-            st.session_state["summary"] = result.get("summary", "Stay mindful and consistent!")
+            st.session_state["summary"] = result.get(
+                "summary",
+                "Stay mindful and consistent!",
+            )
 
             if st.session_state["techniques"]:
-                st.success("✨ Here are your personalized AI mindfulness techniques:")
+                st.success(
+                    "✨ Here are your personalized AI mindfulness techniques:"
+                )
                 for technique in st.session_state["techniques"]:
-                    st.markdown(f"### 🧘 {technique['title']} · _{technique['duration_min']} min_")
+                    st.markdown(
+                        f"### 🧘 {technique['title']} · "
+                        f"_{technique['duration_min']} min_"
+                    )
                     st.write(technique["description"])
                     for step in technique["steps"]:
                         st.markdown(f"- {step}")
-                st.markdown(f"---\n**Reflection:** {st.session_state['summary']}")
+                st.markdown(
+                    f"---\n**Reflection:** {st.session_state['summary']}"
+                )
             else:
-                st.warning("⚠️ No AI-generated techniques received. Try again or check your API key.")
-
-
-
-
-if "recommended_ids" in st.session_state and st.session_state["recommended_ids"]:
-    st.markdown("### ✨ AI Recommendations")
-    if st.session_state.get("summary"):
-        st.caption("AI reasoning: " + st.session_state["summary"])
-
-    for rid in st.session_state["recommended_ids"]:
-        item = find_item(lib, rid)
-        if not item:
-            continue
-        with st.container(border=True):
-            st.markdown(f"**{item.title}** · _{item.duration_min} min_")
-            st.write(item.description)
-            st.caption(", ".join(item.tags))
-            if st.button(f"▶ Start {item.title}", key=f"start_{rid}"):
-                start_session(rid)
-                st.rerun()
-
-# Active session view
-s = get_state()
-if s["running"]:
-    item = find_item(lib, s["active_item_id"])
-    if item:
-        step_idx = s["step_index"]
-        step_idx = min(step_idx, len(item.steps) - 1)
-        st.progress(step_idx / len(item.steps))
-        st.markdown(f"**Step {step_idx + 1} of {len(item.steps)}**")
-        st.info(item.steps[step_idx])
-        c1, c2 = st.columns(2)
-        with c1:
-            if st.button("⏭ Next"):
-                next_step(); st.rerun()
-        with c2:
-            if st.button("⏹ End"):
-                stop_session(); st.success("Session completed!")
-else:
-    st.caption("🧘 Select or start a technique to begin.")
-
-
-
-
+                st.warning(
+                    "⚠️ No AI-generated techniques received. "
+                    "Try again or check your API key."
+                )
