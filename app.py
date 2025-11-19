@@ -23,6 +23,8 @@ from services.productivity_storage import save_productivity, load_productivity
 from graph.break_graph import run_break_workflow
 from graph.break_graph import run_llm_break_workflow
 from graph.schemas import CheckIn
+
+
 # profile personalisation and Workload adaptation
 from graph.graph import (
     run_personalized_goal,
@@ -655,22 +657,28 @@ if result:
         edited_activities.append(new_text)
         feedback_flags[new_text] = feedback
 
-    if st.button("💾 Save edits & update plan"):
-        # 1) Update the result in session with edited tasks
-        result.suggested_activities = edited_activities
-        st.session_state["result"] = result
+if st.button("💾 Save edits & update plan"):
+    # 1) Update the result in session with edited tasks
+    result.suggested_activities = edited_activities
+    st.session_state["result"] = result
 
-        # 2) If a personalized plan exists, align it too
-        if "personalized" in st.session_state and st.session_state["personalized"]:
-            try:
-                st.session_state["personalized"].activities = edited_activities
-            except Exception:
-                pass
+    # 2) If a personalized plan exists, align it too
+    if "personalized" in st.session_state and st.session_state["personalized"]:
+        try:
+            st.session_state["personalized"].activities = edited_activities
+        except Exception:
+            pass
 
-        # 3) Track feedback for potential use in analytics / future prompts
-        st.session_state["task_feedback"] = feedback_flags
+    # 3) Persist edits into the saved plan history
+    current_id = st.session_state.get("current_goal_id")
+    if current_id and current_id in st.session_state["saved_plans"]:
+        st.session_state["saved_plans"][current_id]["activities"] = edited_activities
 
-        st.success("✅ Tasks updated. Future adaptations will use your edited tasks.")
+    # 4) Track feedback for future adaptation
+    st.session_state["task_feedback"] = feedback_flags
+
+    st.success("✅ Tasks updated. Future adaptations will use your edited tasks.")
+
 
     # Summary
     st.markdown("---")
@@ -861,8 +869,11 @@ if adapt_submit:
         try:
             from graph.graph import run_workload_adaptation
 
+            # Include any explicit task feedback captured from the plan editor
+            task_feedback = st.session_state.get("task_feedback") or {}
+
             with st.spinner("Right-sizing today’s steps..."):
-                adapted = run_workload_adaptation(g, base_acts, wl)
+                adapted = run_workload_adaptation(g, base_acts, wl, task_feedback=task_feedback)
 
             st.success("✅ Adapted plan for today")
             st.markdown("### 📋 Today’s Micro-Plan")
@@ -1253,7 +1264,163 @@ else:
 
     if insight_text:
         st.info(insight_text)
+# ──────────────────────────────────────────────────────────────────────────────
+# 📝 Weekly Reflection Journal (User Story)
+# ──────────────────────────────────────────────────────────────────────────────
+st.markdown("---")
+st.markdown("## 📝 Weekly Reflection Journal")
 
+st.caption(
+    "Once a week, jot down how your stress felt, what you accomplished, and what was hard. "
+    "The AI mentor will highlight patterns and growth over time."
+)
+
+# Simple local storage for weekly reflections
+JOURNAL_DIR = "data"
+os.makedirs(JOURNAL_DIR, exist_ok=True)
+JOURNAL_FILE = os.path.join(JOURNAL_DIR, "weekly_reflections.json")
+
+def _load_weekly_reflections() -> list:
+    if not os.path.exists(JOURNAL_FILE):
+        return []
+    try:
+        with open(JOURNAL_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return []
+
+def _save_weekly_reflection(entry: dict) -> None:
+    entries = _load_weekly_reflections()
+    entries.append(entry)
+    with open(JOURNAL_FILE, "w", encoding="utf-8") as f:
+        json.dump(entries, f, indent=2, ensure_ascii=False)
+
+existing_entries = _load_weekly_reflections()
+week_ending = st.date_input(
+    "Week ending on",
+    value=datetime.today(),
+    help="Pick the week you are reflecting on (usually Friday or Sunday).",
+    key="weekly_ref_date",
+)
+
+reflection_text = st.text_area(
+    "Write about this week's stress patterns, accomplishments, and challenges:",
+    placeholder=(
+        "For example: This week I felt most stressed on Mon/Tue before stand-up. "
+        "Wins: shipped the API refactor, stayed consistent with 10-min breaks. "
+        "Challenges: skipped meditation on busy days."
+    ),
+    height=200,
+    key="weekly_reflection_text",
+)
+
+analyze_week = st.button("✨ Analyze and Save Weekly Reflection", key="analyze_week_btn")
+
+if analyze_week and reflection_text.strip():
+    from services.llm import client, MODEL
+
+    # Use last 3 AI summaries (if any) to give the model context about growth over time
+    recent_history = [
+        {
+            "week_ending": e.get("week_ending"),
+            "summary": e.get("ai_summary", ""),
+            "stress_pattern": e.get("stress_pattern", ""),
+        }
+        for e in existing_entries[-3:]
+    ]
+
+    user_payload = {
+        "current_week": {
+            "week_ending": week_ending.isoformat(),
+            "raw_text": reflection_text.strip(),
+        },
+        "recent_history": recent_history,
+    }
+
+    with st.spinner("Reflecting on your week..."):
+        try:
+            resp = client.chat.completions.create(
+                model=MODEL,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            "You are a supportive corporate well-being coach. "
+                            "Given a weekly reflection, plus a few recent summaries, "
+                            "identify stress patterns, highlight accomplishments, "
+                            "name key challenges, and describe any growth you see. "
+                            "Then suggest 3–5 specific micro-actions for next week. "
+                            "Reply ONLY as JSON with keys: "
+                            "summary, stress_pattern, accomplishments, challenges, "
+                            "growth_highlights, action_suggestions (list of strings)."
+                        ),
+                    },
+                    {
+                        "role": "user",
+                        "content": json.dumps(user_payload, ensure_ascii=False, indent=2),
+                    },
+                ],
+                response_format={"type": "json_object"},
+                temperature=0.6,
+                max_tokens=700,
+            )
+            data = json.loads(resp.choices[0].message.content or "{}")
+        except Exception as e:
+            st.error(f"Could not analyze weekly reflection: {e}")
+        else:
+            entry = {
+                "week_ending": week_ending.isoformat(),
+                "raw_text": reflection_text.strip(),
+                "ai_summary": data.get("summary", ""),
+                "stress_pattern": data.get("stress_pattern", ""),
+                "accomplishments": data.get("accomplishments", ""),
+                "challenges": data.get("challenges", ""),
+                "growth_highlights": data.get("growth_highlights", ""),
+                "action_suggestions": data.get("action_suggestions", []),
+                "saved_at": datetime.now().isoformat(),
+            }
+            _save_weekly_reflection(entry)
+            st.success("✅ Weekly reflection saved and analyzed.")
+
+            st.markdown("### 🧠 AI Summary of Your Week")
+            if entry["ai_summary"]:
+                st.info(entry["ai_summary"])
+
+            cols = st.columns(2)
+            with cols[0]:
+                st.markdown("#### 🔍 Stress Pattern")
+                st.write(entry["stress_pattern"] or "No clear pattern extracted.")
+                st.markdown("#### 🌟 Accomplishments")
+                st.write(entry["accomplishments"] or "Write at least one win each week.")
+            with cols[1]:
+                st.markdown("#### ⚔️ Challenges")
+                st.write(entry["challenges"] or "Note what felt hardest this week.")
+                st.markdown("#### 🌱 Growth Highlights")
+                st.write(entry["growth_highlights"] or "Growth will show up after a few weeks of journaling.")
+
+            if entry["action_suggestions"]:
+                st.markdown("#### 🎯 Suggestions for Next Week")
+                for s in entry["action_suggestions"]:
+                    st.write(f"- {s}")
+
+# Show a compact history so users can see growth over time
+if existing_entries:
+    st.markdown("### 📚 Recent Weekly Entries")
+    for e in reversed(existing_entries[-4:]):
+        with st.expander(
+            f"Week ending {e.get('week_ending')} – click to view summary",
+            expanded=False,
+        ):
+            st.markdown("**Summary**")
+            st.write(e.get("ai_summary", ""))
+            st.markdown("**Stress pattern**")
+            st.write(e.get("stress_pattern", ""))
+            st.markdown("**Accomplishments**")
+            st.write(e.get("accomplishments", ""))
+            st.markdown("**Challenges**")
+            st.write(e.get("challenges", ""))
+            st.markdown("**Growth highlights**")
+            st.write(e.get("growth_highlights", ""))        
 # ──────────────────────────────────────────────────────────────────────────────
 # 🌬 Guided Meditations, Breathing & Body Scans (8th / last)
 # ──────────────────────────────────────────────────────────────────────────────
@@ -1317,3 +1484,44 @@ else:
                     "⚠️ No AI-generated techniques received. "
                     "Try again or check your API key."
                 )
+             # --- AI MENTOR CHAT ---
+# ──────────────────────────────────────────────────────────────
+# 💬 AI Coaching & Support — Mentor Conversations
+# ──────────────────────────────────────────────────────────────
+st.markdown("---")
+st.markdown("## 💬 AI Coaching & Support — Mentor Conversations")
+
+# Load conversation history
+if "mentor_history" not in st.session_state:
+    st.session_state["mentor_history"] = []
+
+# Show chat history
+for h in st.session_state["mentor_history"]:
+    st.chat_message("user").markdown(h["user"])
+    st.chat_message("assistant").markdown(h["assistant"])
+
+# Chat Input
+user_msg = st.text_input("Tell me what's stressing you out today...")
+
+if user_msg:
+    # Show user message
+    st.chat_message("user").markdown(user_msg)
+
+    # Run the LangGraph mentor pipeline
+    try:
+        from graph.mentor_graph import run_mentor_conversation
+        reply = run_mentor_conversation(
+            history=st.session_state["mentor_history"],
+            user_message=user_msg
+        )
+    except Exception as e:
+        reply = f"⚠️ Mentor error: {e}"
+
+    # Show reply
+    st.chat_message("assistant").markdown(reply)
+
+    # Save to history
+    st.session_state["mentor_history"].append({
+        "user": user_msg,
+        "assistant": reply
+    })
