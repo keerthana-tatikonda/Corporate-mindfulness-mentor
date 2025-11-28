@@ -719,5 +719,17 @@
     "confidence": 0.85,
     "confidence_note": "These activities are tailored towards improving focus through structured mindfulness techniques combined with practical work strategies.",
     "saved_at": 1764314027
+  },
+  {
+    "goal": "improve focus",
+    "suggested_activities": [
+      "5-Minute Guided Focus Meditation: Start each day with a short, focused meditation session using an app like Headspace or Calm. This helps set your intention for focus throughout the day.",
+      "Mindful Breathing Breaks: Set a timer to take three mindful breathing breaks during your workday (e.g., at 10 AM, 2 PM, and 4 PM). Spend two minutes focusing on your breath to clear your mind and refocus.",
+      "Single-tasking Challenge: Designate one hour each day where you only focus on a single task without any distractions (no emails, phone notifications). Use this hour to engage fully in completing a specific project."
+    ],
+    "ai_summary": "This plan includes daily activities aimed at enhancing concentration through structured mindfulness practices and techniques designed for the corporate environment.",
+    "confidence": 0.85,
+    "confidence_note": "These activities are tailored specifically for improving focus based on well-researched mindfulness techniques.",
+    "saved_at": 1764314869
   }
 ]

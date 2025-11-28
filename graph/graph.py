@@ -72,15 +72,15 @@ def run_goal_decomposition(goal_name: str, duration_type: str, description: str 
 
 # --- Profile Personalization ---
 
-class PersonalizeState(TypedDict):
+class PersonalizeState(TypedDict, total=False):
     goal_name: str
     duration_type: str
     description: str
     profile: UserProfile  # Pydantic object
     p_activities: List[str]
     p_summary: str
-    task_feedback: Dict[str, str]   # new
-    completion: Dict[str, bool] 
+    task_feedback: Dict[str, str]   # optional; activity -> "helpful" | "not helpful"
+    completion: Dict[str, bool]     # optional; activity -> completed?
 
 def create_personalize_graph():
     g = StateGraph(PersonalizeState)
@@ -103,20 +103,19 @@ def run_personalized_goal(
         "profile": profile,
         "task_feedback": task_feedback or {},
         "completion": completion or {},
-
         "p_activities": [],
-        "p_summary": ""
+        "p_summary": "",
     })
     return PersonalizedPlanResponse(
         goal=goal.goal_name,
         activities=out["p_activities"],
-        summary=out["p_summary"]
+        summary=out["p_summary"],
     )
 
 
 # --- Workload-Based Adaptation ---
 
-class AdaptState(TypedDict):
+class AdaptState(TypedDict, total=False):
     goal_name: str
     duration_type: str
     base_activities: List[str]
@@ -126,12 +125,14 @@ class AdaptState(TypedDict):
     task_feedback: Dict[str, str]
     completion: Dict[str, bool]
 
+
 def create_adaptation_graph():
     g = StateGraph(AdaptState)
     g.add_node("adapt", adapt_plan_node)
     g.set_entry_point("adapt")
     g.add_edge("adapt", END)
     return g.compile()
+
 
 def run_workload_adaptation(
     goal: Goal,
@@ -149,12 +150,12 @@ def run_workload_adaptation(
         "task_feedback": task_feedback or {},
         "completion": completion or {},
         "adapted_plan": [],
-        "adapted_rationale": ""
+        "adapted_rationale": "",
     })
     return AdaptedPlanResponse(
         goal=goal.goal_name,
         day_plan=out["adapted_plan"],
-        rationale=out["adapted_rationale"]
+        rationale=out["adapted_rationale"],
     )
 
 
