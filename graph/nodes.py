@@ -903,24 +903,65 @@ def personalize_plan_node(state: Dict[str, Any]) -> Dict[str, Any]:
     Input state:
       - goal_name, duration_type, description
       - profile: UserProfile(work_schedule, typical_stress_level, preferences[], constraints[])
+      - task_feedback: Dict[str, str]   (optional)
+      - completion: Dict[str, bool]     (optional)
     Output state adds:
       - p_activities: List[str]   (e.g., '09:30 — 5-min box breathing …')
       - p_summary: str
       - source: "LLM" | "fallback"
     """
-
     goal_name = state["goal_name"]
     duration_type = state["duration_type"]
     description = state.get("description", "")
     profile: UserProfile = state["profile"]
 
+    # --- user profile fields ---
     prefs_list = profile.preferences or []
-    cons_list  = profile.constraints or []
+    cons_list = profile.constraints or []
     sched = profile.work_schedule or "Mon–Fri 09:00-17:00"
     stress = getattr(profile, "typical_stress_level", None)
 
-    # better salt + varied writing styles to avoid repetitive outputs
-    salt  = uuid.uuid4().hex[:8]
+    # --- prior feedback / progress from the base plan ---
+    task_feedback: Dict[str, str] = state.get("task_feedback") or {}
+    completion: Dict[str, bool] = state.get("completion") or {}
+
+    # --- derive extra preferences from tasks marked "helpful" ---
+    derived_prefs: list[str] = []
+
+    for task, flag in task_feedback.items():
+        if flag != "helpful":
+            continue
+        t = task.lower()
+
+        if any(k in t for k in ("breath", "breathing")) and "breathing" not in derived_prefs:
+            derived_prefs.append("breathing")
+
+        if any(k in t for k in ("walk", "outside", "nature")) and "nature" not in derived_prefs:
+            derived_prefs.append("nature")
+
+        if "journal" in t or "write" in t:
+            if "journaling" not in derived_prefs:
+                derived_prefs.append("journaling")
+
+        if "scan" in t or "body scan" in t:
+            if "body_scan" not in derived_prefs:
+                derived_prefs.append("body_scan")
+
+        if any(k in t for k in ("stretch", "yoga", "movement")) and "movement" not in derived_prefs:
+            derived_prefs.append("movement")
+
+    # merge explicit prefs + derived prefs (preserve order, avoid dupes)
+    combined_prefs: list[str] = []
+    for p in prefs_list:
+        if p and p not in combined_prefs:
+            combined_prefs.append(p)
+    for p in derived_prefs:
+        if p not in combined_prefs:
+            combined_prefs.append(p)
+    prefs_list = combined_prefs
+
+    # --- randomness & style (your existing logic) ---
+    salt = uuid.uuid4().hex[:8]
     styles = [
         "very concise and practical",
         "gentle and encouraging",
@@ -929,6 +970,7 @@ def personalize_plan_node(state: Dict[str, Any]) -> Dict[str, Any]:
     ]
     style = random.choice(styles)
 
+    # --- system prompt stays the same ---
     system = (
         "You are a corporate mindfulness coach. "
         "Always return JSON with 'timeline' (array of 3–6 items) and 'summary' (string). "
@@ -938,14 +980,39 @@ def personalize_plan_node(state: Dict[str, Any]) -> Dict[str, Any]:
         "(e.g., if 'no audio', avoid audio-guided activities)."
     )
 
+    # --- summarize feedback / progress for the LLM ---
+    helpful = [t for t, f in task_feedback.items() if f == "helpful"]
+    not_helpful = [t for t, f in task_feedback.items() if f and f != "helpful"]
+    completed = [t for t, done in completion.items() if done]
+
+    feedback_lines: list[str] = []
+    if helpful:
+        feedback_lines.append("Activities the user found helpful: " + "; ".join(helpful[:5]))
+    if not_helpful:
+        feedback_lines.append("Activities the user did not like: " + "; ".join(not_helpful[:5]))
+    if completed:
+        feedback_lines.append("Recently completed tasks: " + "; ".join(completed[:5]))
+
+    feedback_text = "\n".join(feedback_lines) if feedback_lines else "No prior feedback yet."
+
+    # --- user prompt to LLM ---
     user = f"""
 Goal: {goal_name}
-Cadence: {duration_type}
+Cadence: {duration_type or 'weekly'}
 Context: {description or "-"}
+
 Work schedule: {sched}
 Typical stress (0–10): {stress if stress is not None else "-"}
-Preferences: {", ".join(prefs_list) or "-"}
-Constraints: {", ".join(cons_list) or "-"}
+
+Preferences (explicit + learned from past helpful tasks):
+{", ".join(prefs_list) or "-"}
+
+Constraints:
+{", ".join(cons_list) or "-"}
+
+Recent feedback and progress:
+{feedback_text}
+
 Writing style: {style}
 Randomness hint: {salt}
 
@@ -958,7 +1025,7 @@ Return ONLY a JSON object like:
 }}
 """
 
-    # --- helper: basic validation/cleanup of LLM items ---
+    # --- helper: basic validation/cleanup of LLM items (same as you had) ---
     def _clean_items(timeline: List[Dict[str, Any]]) -> List[str]:
         seen = set()
         cleaned: List[str] = []
@@ -969,7 +1036,6 @@ Return ONLY a JSON object like:
             instr = str(item.get("instructions", "")).strip()
             if not t or not lbl:
                 continue
-            # normalize & dedupe on time+label
             key = (t, lbl.lower())
             if key in seen:
                 continue
@@ -978,31 +1044,32 @@ Return ONLY a JSON object like:
             cleaned.append(f"{t} — {dur_txt}{lbl}. {instr}".strip())
         return cleaned
 
-    # --- Try LLM path first: ask for multiple candidates and pick one at random ---
-    data = {}
+    # --- Try LLM path first ---
+    data: Dict[str, Any] = {}
     try:
         resp = client.chat.completions.create(
             model=MODEL,
-            messages=[{"role": "system", "content": system},
-                      {"role": "user", "content": user}],
-            temperature=0.9,          # ↑ variety
-            top_p=0.95,               # ↑ diversity
-            n=3,                      # request 3 variants
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+            temperature=0.9,
+            top_p=0.95,
+            n=3,
             response_format={"type": "json_object"},
             max_tokens=900,
         )
-        # choose one random candidate
         choice = random.choice(resp.choices)
         data = json.loads(choice.message.content or "{}")
     except Exception:
         data = {}
 
     timeline = data.get("timeline") or []
-    summary  = (data.get("summary") or "").strip()
+    summary = (data.get("summary") or "").strip()
 
     items = _clean_items(timeline)
 
-    # If model gave too little or nothing, use deterministic timeline (your existing helper)
+    # --- deterministic fallback if LLM output is too weak ---
     if len(items) < 3:
         items = _deterministic_timeline(
             schedule=sched,
@@ -1014,7 +1081,7 @@ Return ONLY a JSON object like:
         if not summary:
             summary = (
                 "A compact timeline inside your work hours, aligned with your "
-                "preferences and constraints."
+                "preferences, constraints, and what has worked well for you so far."
             )
 
     return {
@@ -1031,6 +1098,8 @@ def adapt_plan_node(state: Dict[str, Any]) -> Dict[str, Any]:
       - goal_name, duration_type
       - base_activities: List[str]  (what you'd normally do)
       - workload: WorkloadReport {date, meetings, busy_hours, fatigue, blockers[]}
+      - task_feedback: Dict[str, str]   # optional, e.g. {"...task...": "helpful" | "not helpful"}
+      - completion: Dict[str, bool]     # optional, e.g. {"...task...": True/False}
     Output:
       - adapted_plan: List[str] (2–5 items)
       - adapted_rationale: str
@@ -1040,6 +1109,34 @@ def adapt_plan_node(state: Dict[str, Any]) -> Dict[str, Any]:
     cadence = state.get("duration_type", "")
     base_activities = state.get("base_activities", []) or []
     workload: WorkloadReport = state.get("workload")
+
+    # ---------- NEW: use user feedback + completion ----------
+    task_feedback: Dict[str, str] = state.get("task_feedback") or {}
+    completion: Dict[str, bool] = state.get("completion") or {}
+
+    # 1) Drop activities user said are not helpful
+    if task_feedback:
+        base_activities = [
+            act for act in base_activities
+            if task_feedback.get(act) != "not helpful"
+        ]
+
+    # 2) Prefer helpful and not-yet-completed activities
+    def _score_activity(act: str) -> int:
+        score = 0
+        if task_feedback.get(act) == "helpful":
+            score += 2
+        if not completion.get(act, False):
+            score += 1
+        return score
+
+    if base_activities:
+        base_activities = sorted(
+            base_activities,
+            key=_score_activity,
+            reverse=True,
+        )
+    # ---------- END NEW ----------
 
     # --- helpers for deterministic fallback (kept local so this function is self-contained) ---
     def _tier(busy_hours: float) -> tuple[int, int]:
@@ -1149,7 +1246,9 @@ def adapt_plan_node(state: Dict[str, Any]) -> Dict[str, Any]:
         "You are a structured corporate wellness coach. "
         "Return valid JSON only with keys 'day_plan' (array of 2–6 items) and 'rationale' (string). "
         "Each item must include time (HH:MM 24h), duration_min (int), label (short), and instructions (one sentence). "
-        "Use base_activities as inspiration but right-size to today's workload."
+        "Use base_activities as inspiration but right-size to today's workload. "
+        "Some activities may be marked as helpful or not helpful, and some may already be completed — "
+        "prefer helpful, not-yet-completed items when building today's micro-plan."
     )
     user = {
         "goal": goal,
@@ -1161,7 +1260,10 @@ def adapt_plan_node(state: Dict[str, Any]) -> Dict[str, Any]:
         "target_items": target_count,
         "max_duration_min": max_dur,
         "base_activities": base_activities[:6],
-        "instruction": "Prefer placing items after midday when hours are heavy."
+        # optional extra context for the LLM (backwards compatible)
+        "task_feedback": task_feedback,
+        "completion": completion,
+        "instruction": "Prefer placing items after midday when hours are heavy.",
     }
 
     adapted_plan: List[str] = []
@@ -1200,197 +1302,10 @@ def adapt_plan_node(state: Dict[str, Any]) -> Dict[str, Any]:
     if len(adapted_plan) < 2:
         adapted_plan, adapted_rationale = _fallback_plan(workload)
 
-
     return {
         **state,
         "adapted_plan": adapted_plan[:5],
         "adapted_rationale": adapted_rationale or "Adjusted to match today's workload.",
-    }
-
-
-
-# --- Morning Check-In Node (additive) ---
-# --- Morning Check-In Node (robust & personalized fallback) ---
-# # --- Morning Check-In (helpers + node) ---
-
-import logging
-import hashlib
-from pydantic import ValidationError
-from .schemas import DayAdjustment
-
-log = logging.getLogger(__name__)
-
-CHECKIN_SYS_PROMPT = (
-    "You are a corporate mindfulness mentor. Given a user's morning check-in, "
-    "summarize their state, flag risks, and suggest 3-5 concrete, brief actions for today. "
-    "Actions must be short, feasible at work, and tied to stress management (breathwork, micro-breaks, reframing). "
-    "Reply in strict JSON with keys: summary (str), focus_for_today (list[str]), risk_flags (list[str])."
-)
-
-def _to_list_checkin(value):
-    """Coerce arbitrary JSON-ish values into List[str]."""
-    if value is None:
-        return []
-    if isinstance(value, list):
-        return [str(x).strip() for x in value if str(x).strip()]
-    if isinstance(value, str):
-        parts = [p.strip() for p in value.replace("\r", "").split("\n")]
-        flat: List[str] = []
-        for p in parts:
-            flat += [q.strip() for q in p.split(",")]
-        return [x for x in flat if x]
-    s = str(value).strip()
-    return [s] if s else []
-
-def _rule_based_fallback(ck: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Deterministic, input-sensitive fallback:
-    - Seed from (mood, sleep, energy, workload) so ANY change alters the selection.
-    - Pick different micro-actions from per-factor pools.
-    - Ensure 3–5 total items and at least one per provided field.
-    """
-    mood = (ck.get("mood") or "").lower().strip()
-    sleep = (ck.get("sleep_quality") or "").lower().strip()
-    energy = (ck.get("energy") or "").lower().strip()
-    workload = (ck.get("workload") or "").lower().strip()
-    notes = (ck.get("notes") or "").strip()
-
-    seed_str = f"{mood}|{sleep}|{energy}|{workload}"
-    seed = int(hashlib.sha1(seed_str.encode("utf-8")).hexdigest(), 16)
-    rng = random.Random(seed)
-
-    mood_pool = {
-        "calm": [
-            "1-min grounding before first meeting",
-            "gratitude note at lunch",
-            "slow nasal breathing for 2 min mid-morning",
-        ],
-        "neutral": [
-            "3 mindful breaths before each call",
-            "2-min posture reset hourly",
-            "note 1 intention for the afternoon",
-        ],
-        "anxious": [
-            "2-min box breathing before hard tasks",
-            "3-min cognitive reframe (worry → counter-fact)",
-            "progressive muscle relax for 2 min at desk",
-        ],
-        "frustrated": [
-            "4-7-8 breath before sending emails",
-            "2-min walk to reset after blockers",
-            "write-and-hold draft for 5 min before sending",
-        ],
-    }
-    sleep_pool = {
-        "poor": [
-            "4-7-8 breathing before first meeting",
-            "10-min earlier wind-down tonight",
-            "skip caffeine after 2pm",
-        ],
-        "ok": [
-            "1-min mindful breath before lunch",
-            "light stretch mid-afternoon",
-            "screen break: 20-20-20 twice today",
-        ],
-        "great": [
-            "10-min deep work sprint early morning",
-            "2-min energizer breath (in fast, out slow)",
-            "share one quick win with teammate",
-        ],
-    }
-    energy_pool = {
-        "low": [
-            "5-min brisk walk at lunch",
-            "water + light snack mid-afternoon",
-            "sunlight break for 3 min",
-        ],
-        "medium": [
-            "2×45-min focus sprints (timer on)",
-            "micro-stretch every hour",
-            "check in with posture at 3pm",
-        ],
-        "high": [
-            "tackle the hardest task first",
-            "mentor a teammate for 10 min",
-            "end-of-day reflect on 1 learning",
-        ],
-    }
-    workload_pool = {
-        "light": [
-            "batch messages twice today",
-            "finish one small backlog item",
-            "organize tomorrow's top 3",
-        ],
-        "normal": [
-            "plan 3 priority tasks (timeboxed)",
-            "schedule 3-min break after each block",
-            "say no to 1 low-impact ask",
-        ],
-        "heavy": [
-            "90-min deep focus (no notifications)",
-            "break tasks into 25-min pomodoros",
-            "delegate or defer 1 item",
-        ],
-    }
-
-    def pick_from(pool_map, key, k=1):
-        if not key or key not in pool_map:
-            return []
-        items = pool_map[key][:]
-        rng.shuffle(items)
-        return items[:k]
-
-    actions: List[str] = []
-    flags: List[str] = []
-
-    actions += pick_from(mood_pool, mood, 1)
-    actions += pick_from(sleep_pool, sleep, 1)
-    actions += pick_from(energy_pool, energy, 1)
-    actions += pick_from(workload_pool, workload, 1)
-
-    if sleep == "poor":
-        flags.append("poor sleep")
-    if mood in {"anxious", "frustrated"}:
-        flags.append("elevated stress")
-    if energy == "low":
-        flags.append("low energy")
-    if workload == "heavy":
-        flags.append("heavy workload")
-
-    candidate_pool = (
-        mood_pool.get(mood, []) +
-        sleep_pool.get(sleep, []) +
-        energy_pool.get(energy, []) +
-        workload_pool.get(workload, [])
-    )
-    seen = set()
-    dedup: List[str] = []
-    for a in actions + candidate_pool:
-        key = a.lower()
-        if key not in seen:
-            seen.add(key)
-            dedup.append(a)
-
-    target_min, target_max = 3, 5
-    while len(dedup) < target_min and candidate_pool:
-        rng.shuffle(candidate_pool)
-        cand = candidate_pool.pop(0)
-        if cand.lower() not in seen:
-            seen.add(cand.lower())
-            dedup.append(cand)
-    dedup = dedup[:target_max]
-
-    summary_bits: List[str] = []
-    if flags:
-        summary_bits.append(" • ".join(flags))
-    if notes:
-        summary_bits.append(f"note: {notes[:80]}")
-    summary = "Plan tuned for today" + (f" ({'; '.join(summary_bits)})" if summary_bits else ".")
-
-    return {
-        "summary": summary,
-        "focus_for_today": dedup,
-        "risk_flags": flags
     }
 
 def morning_checkin_node(state: Dict[str, Any]) -> Dict[str, Any]:

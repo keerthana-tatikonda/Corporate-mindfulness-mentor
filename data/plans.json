@@ -655,5 +655,69 @@
     "confidence": 0.55,
     "confidence_note": "Fallback plan; confidence estimated heuristically.",
     "saved_at": 1763008564
+  },
+  {
+    "goal": "improve focus",
+    "suggested_activities": [
+      "5-Minute Breathing Space: Start your day with a 5-minute focused breathing exercise, concentrating solely on the breath entering and leaving your body to establish a present-focused mindset.",
+      "Pomodoro Mindfulness Breaks: During work intervals, implement the Pomodoro Technique. After every 25 minutes of focused work, take a 5-minute mindful break where you practice awareness of your surroundings or do a short body scan.",
+      "Focused Visualization Exercise: At the end of each workday, spend 10 minutes visualizing your most productive self in action. Picture yourself completing tasks with clarity and focus, reinforcing this state of mind for future tasks.",
+      "Gratitude Reflection Journal: Each evening, write down three specific things that went well during the day related to your focus and productivity. This will help reinforce positive experiences associated with being focused.",
+      "Mindful Listening Practice: In meetings or while collaborating with colleagues, practice mindful listening by fully concentrating on what is being said without formulating responses until after they finish speaking."
+    ],
+    "ai_summary": "This plan combines breathing exercises, structured work intervals with mindfulness breaks, visualization techniques, gratitude journaling, and mindful listening to enhance overall focus and presence in daily tasks.",
+    "confidence": 0.78,
+    "confidence_note": "These activities are tailored specifically to improve focus through structured practice and reflection.",
+    "saved_at": 1764312813
+  },
+  {
+    "goal": "improve focus",
+    "suggested_activities": [
+      "5-minute Mindful Breathing: Start each day with a dedicated session of mindful breathing to center your thoughts and reduce distractions.",
+      "Pomodoro Technique with Mindfulness Breaks: Implement the Pomodoro technique by working for 25 minutes followed by a 5-minute mindfulness break, focusing on your breath or a guided meditation during the breaks.",
+      "Focused Attention Meditation: Spend 10 minutes daily practicing focused attention meditation, where you concentrate solely on an object or sound, training your mind to maintain focus amidst distractions."
+    ],
+    "ai_summary": "This plan includes targeted mindfulness activities designed to enhance concentration through structured breathing exercises, time management techniques incorporating mindfulness breaks, and focused meditation practices.",
+    "confidence": 0.75,
+    "confidence_note": "These activities are tailored specifically for improving focus and incorporate both mindfulness and productivity strategies.",
+    "saved_at": 1764313223
+  },
+  {
+    "goal": "improve focus",
+    "suggested_activities": [
+      "Engage in a 10-minute breath counting meditation before starting your workweek. Focus on each inhale and exhale, counting up to ten and then repeating.",
+      "Implement the Pomodoro Technique by working for 25 minutes with full attention on a single task, followed by a 5-minute mindful break where you can practice deep breathing or stretch.",
+      "At the end of the week, dedicate 15 minutes to reflect on what activities helped you maintain focus, writing down insights in a dedicated journal."
+    ],
+    "ai_summary": "This plan includes focused breathing exercises to center your mind, structured work sessions to enhance concentration, and reflective journaling to assess your progress.",
+    "confidence": 0.82,
+    "confidence_note": "These activities are tailored specifically for improving focus and are backed by mindfulness research.",
+    "saved_at": 1764313365
+  },
+  {
+    "goal": "improve focus",
+    "suggested_activities": [
+      "Start each day with a 10-minute focused breathing exercise, concentrating solely on your breath to calm the mind and enhance attention.",
+      "Implement a 'Pomodoro Technique' during work hours: focus intensely for 25 minutes on one task followed by a 5-minute break where you practice mindful walking or stretching.",
+      "Conduct a 'Focus Check-In' every two hours where you assess your current level of focus on tasks and take three deep breaths to reset if needed."
+    ],
+    "ai_summary": "This mindfulness plan is designed to specifically enhance focus through structured breathing exercises, time management techniques, and regular check-ins to maintain attention throughout the workday.",
+    "confidence": 0.82,
+    "confidence_note": "These activities are tailored for improving focus in a corporate setting based on established practices in mindfulness and productivity enhancement.",
+    "saved_at": 1764313827
+  },
+  {
+    "goal": "improve focus",
+    "suggested_activities": [
+      "Morning Mindfulness Minutes: Spend 10 minutes each morning in a focused breathing exercise, counting each inhale and exhale to cultivate present-moment awareness and enhance concentration throughout the day.",
+      "Focused Work Blocks: Implement the Pomodoro Technique by working for 25 minutes on a single task without distractions, followed by a 5-minute mindfulness break where you engage in deep breathing or stretching.",
+      "Midday Mindfulness Reset: Take a short walk outside during lunch. Focus on your surroundings, paying close attention to the sounds and sights to help reset your mind and refocus for the afternoon.",
+      "Mindful Journaling: At the end of the day, write down three things that went well and how you stayed focused. Reflect on distractions and strategies that helped maintain concentration.",
+      "Evening Digital Detox: Turn off all screens at least one hour before bedtime. Use this time for mindful activities like reading or meditation to improve focus for the next day."
+    ],
+    "ai_summary": "This plan integrates structured mindfulness practices with work-focused techniques designed specifically to enhance concentration. By incorporating daily mindfulness into both work sessions and personal time, you'll train your mind to stay present and focused.",
+    "confidence": 0.85,
+    "confidence_note": "These activities are tailored towards improving focus through structured mindfulness techniques combined with practical work strategies.",
+    "saved_at": 1764314027
   }
 ]

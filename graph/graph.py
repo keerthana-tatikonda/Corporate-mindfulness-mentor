@@ -1,6 +1,6 @@
 # graph/graph.py
 from langgraph.graph import StateGraph, END
-from typing import TypedDict, List, Optional
+from typing import TypedDict, List, Optional, Dict
 from .schemas import (
     Goal, PlanResponse, DecomposedPlan,
     UserProfile, PersonalizedPlanRequest, PersonalizedPlanResponse,
@@ -79,6 +79,8 @@ class PersonalizeState(TypedDict):
     profile: UserProfile  # Pydantic object
     p_activities: List[str]
     p_summary: str
+    task_feedback: Dict[str, str]   # new
+    completion: Dict[str, bool] 
 
 def create_personalize_graph():
     g = StateGraph(PersonalizeState)
@@ -87,13 +89,21 @@ def create_personalize_graph():
     g.add_edge("personalize", END)
     return g.compile()
 
-def run_personalized_goal(goal: Goal, profile: UserProfile) -> PersonalizedPlanResponse:
+def run_personalized_goal(
+    goal: Goal,
+    profile: UserProfile,
+    task_feedback: Optional[Dict[str, str]] = None,
+    completion: Optional[Dict[str, bool]] = None,
+) -> PersonalizedPlanResponse:
     graph = create_personalize_graph()
     out = graph.invoke({
         "goal_name": goal.goal_name,
         "duration_type": goal.duration_type,
         "description": goal.description or "",
         "profile": profile,
+        "task_feedback": task_feedback or {},
+        "completion": completion or {},
+
         "p_activities": [],
         "p_summary": ""
     })
@@ -113,6 +123,8 @@ class AdaptState(TypedDict):
     workload: WorkloadReport
     adapted_plan: List[str]
     adapted_rationale: str
+    task_feedback: Dict[str, str]
+    completion: Dict[str, bool]
 
 def create_adaptation_graph():
     g = StateGraph(AdaptState)
@@ -124,7 +136,9 @@ def create_adaptation_graph():
 def run_workload_adaptation(
     goal: Goal,
     base_activities: List[str],
-    workload: WorkloadReport
+    workload: WorkloadReport,
+    task_feedback: Optional[Dict[str, str]] = None,
+    completion: Optional[Dict[str, bool]] = None,
 ) -> AdaptedPlanResponse:
     graph = create_adaptation_graph()
     out = graph.invoke({
@@ -132,6 +146,8 @@ def run_workload_adaptation(
         "duration_type": goal.duration_type,
         "base_activities": base_activities,
         "workload": workload,
+        "task_feedback": task_feedback or {},
+        "completion": completion or {},
         "adapted_plan": [],
         "adapted_rationale": ""
     })

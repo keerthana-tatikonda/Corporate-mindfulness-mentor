@@ -18,7 +18,7 @@ from services.llm import MODEL
 from services.storage import save_plan
 from services.break_agent import auto_mindfulness_reminder
 from services.checkin_storage import save_checkin, load_checkins
-from services.productivity_storage import save_productivity, load_productivity
+
 
 from graph.break_graph import run_break_workflow
 from graph.break_graph import run_llm_break_workflow
@@ -30,8 +30,6 @@ from graph.graph import (
     run_personalized_goal,
     run_workload_adaptation,
     run_morning_checkin,
-    run_stress_analytics,
-    run_productivity_insights,
 )
 
 from services.session import (
@@ -74,173 +72,6 @@ def render_confidence(provenance: str | None, confidence: float | None, key: str
     st.progress(pct, text="Model confidence")
 
 
-# --- Helpers for Stress-Level Tracking Dashboard -------------
-def _score_stress_from_checkin(entry: dict) -> float:
-    """
-    Turn one saved check-in entry into a numeric stress score (0–100)
-    using mood, sleep quality, energy, and workload.
-    """
-    c = (entry or {}).get("checkin") or {}
-
-    mood_map = {
-        "calm": 0.1,
-        "neutral": 0.4,
-        "anxious": 0.7,
-        "frustrated": 1.0,
-    }
-    sleep_map = {
-        "great": 0.1,
-        "ok": 0.4,
-        "poor": 0.8,
-    }
-    energy_map = {
-        "high": 0.1,
-        "medium": 0.4,
-        "low": 0.8,
-    }
-    workload_map = {
-        "light": 0.2,
-        "normal": 0.5,
-        "heavy": 0.9,
-    }
-
-    mood = c.get("mood") or ""
-    sleep = c.get("sleep_quality") or ""
-    energy = c.get("energy") or ""
-    workload = c.get("workload") or ""
-
-    m = mood_map.get(mood, 0.5)
-    s = sleep_map.get(sleep, 0.4)
-    e = energy_map.get(energy, 0.4)
-    w = workload_map.get(workload, 0.5)
-
-    raw = (m + s + e + w) / 4.0
-    return round(raw * 100, 1)
-
-
-def build_stress_dataframe(raw_checkins: list) -> pd.DataFrame:
-    """
-    Build a DataFrame with:
-      - date: datetime64
-      - stress_score: float (0–100)
-      - mood, sleep_quality, energy, workload
-    """
-    rows = []
-    for item in raw_checkins:
-        c = (item or {}).get("checkin") or {}
-        ts = item.get("saved_at")
-
-        # saved_at is epoch seconds in your checkin_storage.py
-        try:
-            if isinstance(ts, (int, float)):
-                dt = datetime.fromtimestamp(ts)
-            else:
-                dt = datetime.fromisoformat(str(ts))
-        except Exception:
-            dt = datetime.utcnow()
-
-        rows.append(
-            {
-                "date": dt.date(),
-                "stress_score": _score_stress_from_checkin(item),
-                "mood": c.get("mood") or "unknown",
-                "sleep_quality": c.get("sleep_quality") or "unknown",
-                "energy": c.get("energy") or "unknown",
-                "workload": c.get("workload") or "unknown",
-            }
-        )
-
-    if not rows:
-        return pd.DataFrame(
-            columns=[
-                "date",
-                "stress_score",
-                "mood",
-                "sleep_quality",
-                "energy",
-                "workload",
-            ]
-        )
-
-    df = pd.DataFrame(rows)
-    df["date"] = pd.to_datetime(df["date"])
-    df = df.sort_values("date")
-
-    # For weekly aggregation
-    df["week_start"] = df["date"].dt.to_period("W").apply(lambda r: r.start_time.date())
-    return df
-
-
-def build_productivity_dataframe(raw_entries: list) -> pd.DataFrame:
-    """
-    Build a DataFrame with:
-      - date: datetime64
-      - productivity: float (0–10 or whatever scale you use)
-      - prod_notes: notes for tooltip context
-    """
-    rows = []
-    for item in raw_entries:
-        date_str = str(item.get("date") or "")
-        notes = item.get("notes") or ""
-        ts = item.get("saved_at")
-
-        # Try to parse the date, fall back to saved_at timestamp
-        try:
-            if date_str:
-                dt = datetime.fromisoformat(date_str)
-            elif isinstance(ts, (int, float)):
-                dt = datetime.fromtimestamp(ts)
-            else:
-                dt = datetime.utcnow()
-        except Exception:
-            dt = datetime.utcnow()
-
-        rows.append(
-            {
-                "date": dt.date(),
-                "productivity": float(item.get("productivity") or 0.0),
-                "prod_notes": notes,
-            }
-        )
-
-    if not rows:
-        return pd.DataFrame(columns=["date", "productivity", "prod_notes"])
-
-    df = pd.DataFrame(rows)
-    df["date"] = pd.to_datetime(df["date"])
-    df = df.sort_values("date")
-    return df
-
-
-def build_stress_productivity_join(
-    df_stress: pd.DataFrame, df_prod: pd.DataFrame
-) -> pd.DataFrame:
-    """
-    Inner-join stress and productivity on date, so we only keep days
-    where both were recorded.
-    """
-    if df_stress.empty or df_prod.empty:
-        return pd.DataFrame(
-            columns=[
-                "date",
-                "stress_score",
-                "productivity",
-                "mood",
-                "sleep_quality",
-                "energy",
-                "workload",
-                "prod_notes",
-            ]
-        )
-
-    df_s = df_stress.copy()
-    df_p = df_prod.copy()
-    df_s["date"] = df_s["date"].dt.date
-    df_p["date"] = df_p["date"].dt.date
-
-    joined = pd.merge(df_s, df_p, on="date", how="inner")
-    joined["date"] = pd.to_datetime(joined["date"])
-    return joined
 
 
 # Readable card style for plan summary (works in light/dark)
@@ -597,9 +428,6 @@ if dec:
 # ──────────────────────────────────────────────────────────────────────────────
 # Display Main Plan (Activities & Summary)
 # ──────────────────────────────────────────────────────────────────────────────
-# ──────────────────────────────────────────────────────────────────────────────
-# Display Main Plan (Activities & Summary)
-# ──────────────────────────────────────────────────────────────────────────────
 result = st.session_state.get("result")
 
 if result:
@@ -629,7 +457,29 @@ if result:
         )
         st.checkbox(f"**{i}.** {act}", key=checkbox_key)
 
-    # ✏️ New: Edit tasks & feedback (this is still inside `if result:`)
+    # --- Track completion and show progress ---
+    completed_flags = {}
+    total = len(result.suggested_activities)
+    done = 0
+
+    for i, act in enumerate(result.suggested_activities, start=1):
+        cb_key = (
+            f"activity_{current_id}_{i}"
+            if current_id
+            else f"activity_temp_{i}"
+        )
+        finished = bool(st.session_state.get(cb_key, False))
+        completed_flags[act] = finished
+        if finished:
+            done += 1
+
+    # Save completion into session so adaptation can use it later
+    st.session_state["task_completion"] = completed_flags
+
+    if total > 0:
+        st.info(f"✅ You’ve completed {done} of {total} tasks for this plan.")
+
+    # ✏️ Edit tasks & feedback
     st.markdown("### ✏️ Edit Your Tasks & Give Feedback")
     st.caption(
         "You can rewrite any task and mark whether it’s working for you. "
@@ -657,28 +507,27 @@ if result:
         edited_activities.append(new_text)
         feedback_flags[new_text] = feedback
 
-if st.button("💾 Save edits & update plan"):
-    # 1) Update the result in session with edited tasks
-    result.suggested_activities = edited_activities
-    st.session_state["result"] = result
+    if st.button("💾 Save edits & update plan"):
+        # 1) Update the result in session with edited tasks
+        result.suggested_activities = edited_activities
+        st.session_state["result"] = result
 
-    # 2) If a personalized plan exists, align it too
-    if "personalized" in st.session_state and st.session_state["personalized"]:
-        try:
-            st.session_state["personalized"].activities = edited_activities
-        except Exception:
-            pass
+        # 2) If a personalized plan exists, align it too
+        if "personalized" in st.session_state and st.session_state["personalized"]:
+            try:
+                st.session_state["personalized"].activities = edited_activities
+            except Exception:
+                pass
 
-    # 3) Persist edits into the saved plan history
-    current_id = st.session_state.get("current_goal_id")
-    if current_id and current_id in st.session_state["saved_plans"]:
-        st.session_state["saved_plans"][current_id]["activities"] = edited_activities
+        # 3) Persist edits into the saved plan history
+        current_id = st.session_state.get("current_goal_id")
+        if current_id and current_id in st.session_state["saved_plans"]:
+            st.session_state["saved_plans"][current_id]["activities"] = edited_activities
 
-    # 4) Track feedback for future adaptation
-    st.session_state["task_feedback"] = feedback_flags
+        # 4) Track feedback for future adaptation
+        st.session_state["task_feedback"] = feedback_flags
 
-    st.success("✅ Tasks updated. Future adaptations will use your edited tasks.")
-
+        st.success("✅ Tasks updated. Future adaptations will use your edited tasks.")
 
     # Summary
     st.markdown("---")
@@ -722,6 +571,7 @@ Created with Corporate Mindfulness Mentor
         )
 
     with col3:
+        current_id = st.session_state.get("current_goal_id")
         if current_id and current_id in st.session_state["saved_plans"]:
             plan_data = st.session_state["saved_plans"][current_id]
             md_content = export_plan_markdown(plan_data)
@@ -782,9 +632,16 @@ if personalize_submit:
             ],
         )
         try:
+            # pull any existing feedback/progress from session
+            task_feedback = st.session_state.get("task_feedback") or {}
+            task_completion = st.session_state.get("task_completion") or {}
             with st.spinner("Tailoring your plan to your schedule..."):
-                p = run_personalized_goal(g, profile)
-
+                p = run_personalized_goal(
+                    g,
+                    profile,
+                    task_feedback=task_feedback,
+                    completion=task_completion,
+                )
             st.success("✅ Personalized plan created")
             st.markdown("### 🎯 Personalized Activities")
             for i, a in enumerate(p.activities, 1):
@@ -872,8 +729,11 @@ if adapt_submit:
             # Include any explicit task feedback captured from the plan editor
             task_feedback = st.session_state.get("task_feedback") or {}
 
+            #completion status from checkboxes
+            task_completion = st.session_state.get("task_completion") or {}
+
             with st.spinner("Right-sizing today’s steps..."):
-                adapted = run_workload_adaptation(g, base_acts, wl, task_feedback=task_feedback)
+                adapted = run_workload_adaptation(g, base_acts, wl, task_feedback=task_feedback, completion=task_completion)
 
             st.success("✅ Adapted plan for today")
             st.markdown("### 📋 Today’s Micro-Plan")
@@ -1058,212 +918,6 @@ if do_checkin:
         st.caption("Flags: " + ", ".join(adj.risk_flags))
 
 
-# ---------------------------------------------------------------------------
-# 📊 Monitoring & Analytics – Stress-Level Tracking Dashboard (6th)
-# ---------------------------------------------------------------------------
-# ---------------------------------------------------------------------------
-# 📊 Monitoring & Analytics – Stress-Level Tracking Dashboard (User Story)
-# ---------------------------------------------------------------------------
-st.markdown("---")
-st.markdown("## 📊 Stress-Level Tracking Dashboard")
-
-if "load_checkins" not in globals() or load_checkins is None:
-    st.info(
-        "The stress dashboard is not configured because check-in storage "
-        "is missing. Make sure services/checkin_storage.py defines "
-        "`load_checkins` and it is imported at the top of app.py."
-    )
-else:
-    all_checkins = load_checkins()
-
-    if not all_checkins:
-        st.info(
-            "No saved Morning Wellness Check-Ins yet. "
-            "Submit a few check-ins above to see your daily and weekly "
-            "stress graphs here."
-        )
-    else:
-        df = build_stress_dataframe(all_checkins)
-        max_date = df["date"].max()
-
-        # ⏱ Time window selector (buttons instead of slider)
-        st.markdown("#### ⏱ Time Window for Daily Stress")
-        days_window = st.radio(
-            "How much recent history do you want to see?",
-            options=[7, 14, 21, 30],
-            index=1,  # default: 14 days
-            format_func=lambda x: f"{x} days",
-            help=(
-                "This controls how many days of stress check-ins are shown "
-                "in the daily stress chart below."
-            ),
-            horizontal=True,
-        )
-        st.caption(
-            "Use the buttons above to quickly switch between 1, 2, 3, or 4 weeks "
-            "of recent stress trends."
-        )
-
-        cutoff = max_date - pd.Timedelta(days=days_window - 1)
-        df_window = df[df["date"] >= cutoff]
-
-        col_daily, col_weekly = st.columns(2)
-
-        # Daily line chart
-        with col_daily:
-            st.markdown("#### 📈 Daily Stress (0–100)")
-            daily_chart = (
-                alt.Chart(df_window)
-                .mark_line(point=True)
-                .encode(
-                    x="date:T",
-                    y=alt.Y("stress_score:Q", scale=alt.Scale(domain=[0, 100])),
-                    tooltip=[
-                        "date:T",
-                        "stress_score:Q",
-                        "mood:N",
-                        "sleep_quality:N",
-                        "energy:N",
-                        "workload:N",
-                    ],
-                )
-                .properties(height=260)
-            )
-            st.altair_chart(daily_chart, use_container_width=True)
-
-        # Weekly bar chart
-        with col_weekly:
-            st.markdown("#### 📊 Weekly Average Stress")
-            weekly = (
-                df.groupby("week_start", as_index=False)["stress_score"]
-                .mean()
-                .rename(columns={"stress_score": "avg_stress"})
-            )
-            weekly_chart = (
-                alt.Chart(weekly)
-                .mark_bar()
-                .encode(
-                    x="week_start:T",
-                    y=alt.Y("avg_stress:Q", scale=alt.Scale(domain=[0, 100])),
-                    tooltip=["week_start:T", "avg_stress:Q"],
-                )
-                .properties(height=260)
-            )
-            st.altair_chart(weekly_chart, use_container_width=True)
-
-        # 🤖 AI feedback on stress trends
-        st.markdown("### 🤖 AI Feedback on Your Stress Trends")
-        with st.spinner("Analyzing your stress history..."):
-            insights = run_stress_analytics(all_checkins)
-
-        if insights:
-            st.info(insights)
-
-
-# ---------------------------------------------------------------------------
-# 📉 Productivity vs. Stress Insights (User Story)
-# ---------------------------------------------------------------------------
-st.markdown("---")
-st.markdown("## 📉 Productivity vs. Stress Insights")
-
-with st.form("productivity_form", clear_on_submit=False):
-    colp1, colp2 = st.columns(2)
-    with colp1:
-        prod_date = st.date_input("Date", value=datetime.today())
-    with colp2:
-        prod_score = st.slider(
-            "Productivity (0–10)",
-            min_value=0,
-            max_value=10,
-            value=7,
-            help="Rate how productive you felt overall during this day.",
-        )
-    prod_notes = st.text_input(
-        "Notes (optional)",
-        placeholder="e.g., Deep work in morning; many meetings; context switching, etc.",
-    )
-    prod_submitted = st.form_submit_button("Save today's productivity")
-
-if prod_submitted:
-    try:
-        save_productivity(prod_date.isoformat(), prod_score, prod_notes)
-        st.success("✅ Productivity entry saved.")
-    except Exception as e:
-        st.error(f"Could not save productivity entry: {e}")
-
-# Build dataframes from stored data
-stress_df = build_stress_dataframe(
-    load_checkins() if callable(load_checkins) else []
-)
-prod_df = build_productivity_dataframe(
-    load_productivity() if callable(load_productivity) else []
-)
-joined_df = build_stress_productivity_join(stress_df, prod_df)
-
-if joined_df.empty:
-    st.info(
-        "Log at least one Morning Wellness Check-In and one Productivity entry "
-        "on the same date to compare stress vs. performance."
-    )
-else:
-    col_scatter, col_time = st.columns(2)
-
-    # Scatter: stress vs productivity
-    with col_scatter:
-        st.markdown("#### 🔍 Daily Stress vs. Productivity")
-        scatter = (
-            alt.Chart(joined_df)
-            .mark_circle(size=80)
-            .encode(
-                x=alt.X("stress_score:Q", title="Stress (0–100)"),
-                y=alt.Y("productivity:Q", title="Productivity (0–10)"),
-                color="date:T",
-                tooltip=[
-                    "date:T",
-                    "stress_score:Q",
-                    "productivity:Q",
-                    "mood:N",
-                    "sleep_quality:N",
-                    "energy:N",
-                    "workload:N",
-                    "prod_notes:N",
-                ],
-            )
-            .properties(height=260)
-        )
-        st.altair_chart(scatter, use_container_width=True)
-
-    # Trend chart over time
-    with col_time:
-        st.markdown("#### 📆 Stress & Productivity Over Time")
-        long_df = pd.melt(
-            joined_df[["date", "stress_score", "productivity"]],
-            id_vars="date",
-            value_vars=["stress_score", "productivity"],
-            var_name="metric",
-            value_name="value",
-        )
-        trend = (
-            alt.Chart(long_df)
-            .mark_line(point=True)
-            .encode(
-                x="date:T",
-                y="value:Q",
-                color="metric:N",
-                tooltip=["date:T", "metric:N", "value:Q"],
-            )
-            .properties(height=260)
-        )
-        st.altair_chart(trend, use_container_width=True)
-
-    # 🤖 AI feedback on stress vs productivity
-    st.markdown("### 🤖 AI Feedback on Stress vs. Productivity")
-    joined_records = joined_df.to_dict(orient="records")
-    with st.spinner("Analyzing how stress is affecting your productivity..."):
-        insight_text = run_productivity_insights(joined_records)
-
-    if insight_text:
-        st.info(insight_text)
 # ──────────────────────────────────────────────────────────────────────────────
 # 📝 Weekly Reflection Journal (User Story)
 # ──────────────────────────────────────────────────────────────────────────────
