@@ -81,6 +81,9 @@ class PersonalizeState(TypedDict, total=False):
     p_summary: str
     task_feedback: Dict[str, str]   # optional; activity -> "helpful" | "not helpful"
     completion: Dict[str, bool]     # optional; activity -> completed?
+    #confidence
+    p_confidence: Optional[float]
+    p_confidence_note: Optional[str]
 
 def create_personalize_graph():
     g = StateGraph(PersonalizeState)
@@ -105,11 +108,17 @@ def run_personalized_goal(
         "completion": completion or {},
         "p_activities": [],
         "p_summary": "",
+        # NEW seeds so these exist in state
+        "p_confidence": None,
+        "p_confidence_note": None,
     })
     return PersonalizedPlanResponse(
         goal=goal.goal_name,
         activities=out["p_activities"],
         summary=out["p_summary"],
+        # NEW: surface confidence in the response model
+        confidence=out.get("p_confidence"),
+        confidence_note=out.get("p_confidence_note"),
     )
 
 
@@ -124,6 +133,8 @@ class AdaptState(TypedDict, total=False):
     adapted_rationale: str
     task_feedback: Dict[str, str]
     completion: Dict[str, bool]
+    adapted_confidence: Optional[float]
+    adapted_confidence_note: Optional[str]
 
 
 def create_adaptation_graph():
@@ -151,11 +162,17 @@ def run_workload_adaptation(
         "completion": completion or {},
         "adapted_plan": [],
         "adapted_rationale": "",
+                # confidence
+        "adapted_confidence": None,
+        "adapted_confidence_note": None,
     })
     return AdaptedPlanResponse(
         goal=goal.goal_name,
         day_plan=out["adapted_plan"],
         rationale=out["adapted_rationale"],
+                # confidence
+        confidence=out.get("adapted_confidence"),
+        confidence_note=out.get("adapted_confidence_note"),
     )
 
 

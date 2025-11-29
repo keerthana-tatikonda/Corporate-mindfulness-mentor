@@ -908,6 +908,8 @@ def personalize_plan_node(state: Dict[str, Any]) -> Dict[str, Any]:
     Output:
       - p_activities: List[str]
       - p_summary: str
+      - p_confidence: Optional[float]
+      - p_confidence_note: Optional[str]
     """
     goal_name = state["goal_name"]
     duration_type = state["duration_type"]
@@ -937,7 +939,7 @@ def personalize_plan_node(state: Dict[str, Any]) -> Dict[str, Any]:
         if "journal" in t or "write" in t:
             if "journaling" not in derived_prefs:
                 derived_prefs.append("journaling")
-        if "scan" in t or "body scan" in t:
+        if "scan" in t or "body_scan" in t:
             if "body_scan" not in derived_prefs:
                 derived_prefs.append("body_scan")
         if any(k in t for k in ("stretch", "yoga", "movement")) and "movement" not in derived_prefs:
@@ -969,7 +971,8 @@ def personalize_plan_node(state: Dict[str, Any]) -> Dict[str, Any]:
         "Each timeline item MUST include time (HH:MM 24-hour), duration_min (3–10), "
         "a short label, and an instruction sentence. "
         "All items must be inside the user's work schedule and honor constraints "
-        "(e.g., avoid 'body scan' if they said 'no audio')."
+        "(e.g., avoid 'body scan' if they said 'no audio'). "
+        "Optionally include 'confidence' (0–1, float) and 'confidence_note' (short string about reliability)."
     )
 
     # Summarize feedback/progress for the LLM
@@ -1064,12 +1067,32 @@ Randomness hint: {salt}
                 "preferences, constraints, and what has worked well for you so far."
             )
 
+    # --- NEW: derive confidence & note ---
+    # 1) Try to read from LLM JSON (if it sent anything)
+    conf = _extract_llm_conf(data, "confidence") if isinstance(data, dict) else None
+    note = data.get("confidence_note") if isinstance(data, dict) else None
+
+    # 2) If model didn't provide confidence, fall back to heuristic based on items list
+    if conf is None:
+        conf = _heuristic_conf_list(items)
+
+    # 3) If no note from model, synthesize a short explanation
+    if note is None and conf is not None:
+        if conf >= 0.8:
+            note = "High confidence: activities match your schedule, preferences, and past feedback."
+        elif conf >= 0.5:
+            note = "Moderate confidence: good alignment, but feel free to tweak tasks as needed."
+        else:
+            note = "Lower confidence: limited history or unusual pattern; treat this as a starting suggestion."
+
     return {
         **state,
         "p_activities": items[:6],
         "p_summary": summary or "A personalized timeline for your schedule.",
+        # NEW:
+        "p_confidence": conf,
+        "p_confidence_note": note,
     }
-
 
 def adapt_plan_node(state: Dict[str, Any]) -> Dict[str, Any]:
     """
@@ -1226,7 +1249,8 @@ def adapt_plan_node(state: Dict[str, Any]) -> Dict[str, Any]:
         "Each item must include time (HH:MM 24h), duration_min (int), label (short), and instructions (one sentence). "
         "Use base_activities as inspiration but right-size to today's workload. "
         "Some activities may be marked as helpful or not helpful, and some may already be completed — "
-        "prefer helpful, not-yet-completed items when building today's micro-plan."
+        "prefer helpful, not-yet-completed items when building today's micro-plan. "
+        "Optionally include 'confidence' (0–1) and 'confidence_note' explaining how reliable this plan is."
     )
     user = {
         "goal": goal,
@@ -1275,11 +1299,32 @@ def adapt_plan_node(state: Dict[str, Any]) -> Dict[str, Any]:
     # Fallback if LLM output too weak
     if len(adapted_plan) < 2:
         adapted_plan, adapted_rationale = _fallback_plan(workload)
+        data = {}
+        # --- NEW: derive confidence for adaptation ---
+    # Try from LLM JSON first
+    raw_conf = data.get("confidence") if isinstance(data, dict) else None
+    raw_note = data.get("confidence_note") if isinstance(data, dict) else None
+
+    conf = _extract_llm_conf(raw_conf, None)
+    if conf is None:
+        conf = _heuristic_conf_list(adapted_plan)
+
+    note = raw_note
+    if note is None and conf is not None:
+        if conf >= 0.8:
+            note = "High confidence: adapted well to today’s workload and your past feedback."
+        elif conf >= 0.5:
+            note = "Moderate confidence: reasonable fit, but adjust if anything feels unrealistic."
+        else:
+            note = "Lower confidence: unusual workload or limited history; treat as a gentle suggestion."
 
     return {
         **state,
         "adapted_plan": adapted_plan[:5],
         "adapted_rationale": adapted_rationale or "Adjusted to match today's workload.",
+                # Confidence
+        "adapted_confidence": conf,
+        "adapted_confidence_note": note,
     }
 
 

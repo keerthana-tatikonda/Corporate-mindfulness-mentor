@@ -731,5 +731,29 @@
     "confidence": 0.85,
     "confidence_note": "These activities are tailored specifically for improving focus based on well-researched mindfulness techniques.",
     "saved_at": 1764314869
+  },
+  {
+    "goal": "improve focus",
+    "suggested_activities": [
+      "Morning Mindful Breathing (5 minutes): Start each day by focusing on your breath. Inhale deeply for a count of 4, hold for 4, and exhale for 6. Repeat to center yourself before work.",
+      "Single-tasking Sessions (20 minutes): Choose one task and focus exclusively on it without multitasking. Use a timer to maintain this dedicated focus session, followed by a short break.",
+      "Mindful Walking Breaks (10 minutes): Take short walks during breaks where you concentrate on the sensation of your feet touching the ground and the environment around you to reset your mind."
+    ],
+    "ai_summary": "This plan includes breathing exercises to ground yourself, structured focused working sessions to enhance productivity, and mindful walking to refresh your mental state throughout the day.",
+    "confidence": 0.85,
+    "confidence_note": "The activities are designed specifically to improve concentration and can be easily integrated into daily routines.",
+    "saved_at": 1764388083
+  },
+  {
+    "goal": "reduce daily stress",
+    "suggested_activities": [
+      "Attend a weekly guided meditation session focusing on stress relief, incorporating techniques such as body scanning and breath awareness.",
+      "Engage in a 30-minute nature walk every week, practicing mindful observation of surroundings and integrating deep breathing exercises.",
+      "Participate in a 'mindful Monday' journaling session each week to reflect on stress triggers and practice gratitude for positive experiences."
+    ],
+    "ai_summary": "This plan combines structured mindfulness practices with physical activity to effectively reduce daily stress levels. Weekly activities foster consistency while providing tools for immediate stress management.",
+    "confidence": 0.75,
+    "confidence_note": "These activities are specifically designed to address your goal of reducing daily stress through varied mindfulness practices that can be sustained weekly.",
+    "saved_at": 1764388255
   }
 ]

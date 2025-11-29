@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel,Field
 from typing import List, Optional
 
 class Goal(BaseModel):
@@ -62,6 +62,9 @@ class PersonalizedPlanResponse(BaseModel):
     goal: str
     summary: str
     activities: List[str]
+    # NEW: confidence for profile personalization
+    confidence: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    confidence_note: Optional[str] = None
 
 class WorkloadReport(BaseModel):
     date: str                            # ISO date "YYYY-MM-DD"
@@ -74,4 +77,7 @@ class AdaptedPlanResponse(BaseModel):
     goal: str
     day_plan: List[str]                  # 3–5 micro-steps adapted to workload
     rationale: str
+    # NEW: confidence for workload-based adaptation
+    confidence: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    confidence_note: Optional[str] = None
 
