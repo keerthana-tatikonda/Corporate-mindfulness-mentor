@@ -132,3 +132,64 @@ def run_mentor_cycle(user_goal: str, stress_level: int, profile: Dict[str, Any],
         "recommended_ids": final.get("recommended_ids", []),
         "motivation": final.get("user_profile", {}).get("_motivation", "")
     }
+
+# ------------------- CHAT-BASED MENTOR CONVERSATION ---------------------
+
+from services.llm import client, MODEL
+
+def run_mentor_conversation(user_message: str, history: list):
+    """
+    Chat-style AI mentor conversation with confidence score.
+    """
+
+    history = history or []
+
+    # Build messages for LLM
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "You are a calm, supportive corporate wellness mentor. "
+                "Use evidence-based techniques and keep responses empathetic."
+            ),
+        }
+    ]
+
+    for h in history:
+        messages.append({"role": "user", "content": h["user"]})
+        messages.append({"role": "assistant", "content": h["assistant"]})
+
+    messages.append({"role": "user", "content": user_message})
+
+    try:
+        response = client.chat.completions.create(
+            model=MODEL,
+            messages=messages,
+            temperature=0.7,
+            max_tokens=250,
+        )
+
+        assistant_reply = response.choices[0].message.content.strip()
+
+        # -------------------------------
+        # ⭐ NEW: Add confidence score
+        # -------------------------------
+        if hasattr(response.choices[0], "confidence"):
+            confidence = response.choices[0].confidence
+            confidence_note = "Model-provided confidence"
+        else:
+            confidence = 0.65
+            confidence_note = "Estimated confidence (fallback)"
+        # -------------------------------
+
+    except Exception as e:
+        assistant_reply = f"⚠️ Mentor error: {e}"
+        confidence = 0.0
+        confidence_note = "Confidence unavailable due to error."
+
+    return {
+        "user": user_message,
+        "assistant": assistant_reply,
+        "confidence": confidence,
+        "confidence_note": confidence_note,
+    }

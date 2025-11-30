@@ -935,6 +935,7 @@ if st.button("🤖 AI-Powered Mindful Break"):
     st.success(llm_output["reflection"])
     st.caption(f"💡 {llm_output['recommendation']}")
 
+
 enable_auto_breaks_main = st.checkbox(
     "Enable automatic reminders", value=True, key="auto_reminder_box"
 )
@@ -1538,30 +1539,41 @@ st.markdown("## 💬 AI Coaching & Support — Mentor Conversations")
 if "mentor_history" not in st.session_state:
     st.session_state["mentor_history"] = []
 
+# Show previous conversation
 for h in st.session_state["mentor_history"]:
     st.chat_message("user").markdown(h["user"])
     st.chat_message("assistant").markdown(h["assistant"])
 
 user_msg = st.text_input("Tell me what's stressing you out today...")
-
 if user_msg:
     st.chat_message("user").markdown(user_msg)
 
     try:
-        from graph.mentor_graph import run_mentor_conversation
+        from services.mentor_graph import run_mentor_conversation
 
         reply = run_mentor_conversation(
-            history=st.session_state["mentor_history"],
             user_message=user_msg,
+            history=st.session_state["mentor_history"],
         )
     except Exception as e:
-        reply = f"⚠️ Mentor error: {e}"
-
-    st.chat_message("assistant").markdown(reply)
-
-    st.session_state["mentor_history"].append(
-        {
+        reply = {
             "user": user_msg,
-            "assistant": reply,
+            "assistant": f"⚠️ Mentor error: {e}",
         }
-    )
+
+    # Show mentor response
+    st.chat_message("assistant").markdown(reply["assistant"])
+
+    # ⭐ AI Confidence Display (must stay inside this block)
+    if isinstance(reply, dict):       # <---- THIS MUST BE HERE
+        render_confidence(
+            provenance=None,
+            confidence=reply.get("confidence"),
+            key=f"mentor_conf_{len(st.session_state['mentor_history'])}",
+        )
+        if reply.get("confidence_note"):
+            st.caption(reply["confidence_note"])
+
+    # Save message pair
+    st.session_state["mentor_history"].append(reply)
+

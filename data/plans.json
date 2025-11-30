@@ -779,5 +779,41 @@
     "confidence": 0.85,
     "confidence_note": "The activities are tailored for workplace integration and provide immediate stress relief options.",
     "saved_at": 1764459485
+  },
+  {
+    "goal": "reduce stress",
+    "suggested_activities": [
+      "Morning 5-Minute Breathing Exercise: Start your day with a focused breathing session. Sit comfortably, close your eyes, and inhale deeply for 4 seconds, hold for 4 seconds, and exhale for 6 seconds. Repeat this cycle for five minutes.",
+      "Midday Mindful Walk: Take a short break to walk outside or in a quiet area of your office. Focus on the sensation of your feet touching the ground, the rhythm of your breath, and the sights and sounds around you. Aim for at least 10 minutes.",
+      "Evening Gratitude Journaling: Before bed, write down three things that went well during the day or that you are grateful for. Spend a few moments reflecting on why these aspects were significant."
+    ],
+    "ai_summary": "This plan includes daily activities designed to integrate mindfulness into your routine at specific times: morning to set a positive tone for the day, midday to relieve stress through movement, and evening to reflect on positives.",
+    "confidence": 0.78,
+    "confidence_note": "These activities are tailored to create consistent touchpoints throughout your day which can effectively reduce stress.",
+    "saved_at": 1764472508
+  },
+  {
+    "goal": "reduce stress",
+    "suggested_activities": [
+      "5-minute breathing exercise: Close your eyes, inhale deeply for 4 seconds, hold for 4 seconds, and exhale slowly for 6 seconds. Repeat this cycle five times to ground yourself before starting your workday.",
+      "Daily gratitude journaling: At the end of each day, write down three things that went well or that you are grateful for. This helps shift focus from stressors to positive experiences.",
+      "Mindful walking: Take a 10-minute walk during your break focusing on the sensations in your feet as they touch the ground and observe your surroundings without judgment."
+    ],
+    "ai_summary": "This plan includes short daily practices designed to help you manage and reduce stress effectively within a corporate environment.",
+    "confidence": 0.85,
+    "confidence_note": "These activities are specifically chosen based on proven mindfulness techniques that target stress reduction.",
+    "saved_at": 1764473782
+  },
+  {
+    "goal": "reduce stress",
+    "suggested_activities": [
+      "5-minute guided breathing exercise using a mindfulness app to start your day and center your thoughts.",
+      "Take a mindful walk during lunch, focusing on the sensations of your feet touching the ground and the sounds around you.",
+      "Engage in a 10-minute body scan meditation at the end of your workday to release tension accumulated throughout the day."
+    ],
+    "ai_summary": "This plan focuses on daily activities that incorporate short mindfulness practices designed to reduce stress by promoting relaxation and grounding techniques, which can be easily integrated into a busy corporate environment.",
+    "confidence": 0.8,
+    "confidence_note": "These activities are tailored for daily use in a corporate setting, ensuring practicality while effectively targeting stress reduction.",
+    "saved_at": 1764477353
   }
 ]
