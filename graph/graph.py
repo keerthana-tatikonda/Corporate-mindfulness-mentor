@@ -16,6 +16,7 @@ from .schemas import (
     AdaptedPlanResponse,
     CheckIn,
     DayAdjustment,  # <-- this exists in schemas.py
+    StressAnalyticsResult, ProductivityInsightsResult
 )
 from .nodes import (
     generate_plan_node,
@@ -24,6 +25,7 @@ from .nodes import (
     adapt_plan_node,
     morning_checkin_node,
     motivational_message_node, hr_insights_node,
+    stress_analytics_node, productivity_insights_node
 )
 
 # ---------------------------------------------------------------------
@@ -240,6 +242,130 @@ def run_morning_checkin(checkin: CheckIn) -> DayAdjustment:
     return DayAdjustment(**da)
 
 
+# Add these sections to the END of your graph/graph.py file
+
+# ---------------------------------------------------------------------
+# 📊 Stress Analytics Dashboard
+# ---------------------------------------------------------------------
+
+class StressAnalyticsState(TypedDict, total=False):
+    checkins: List[Dict[str, Any]]
+    stress_analytics: Dict[str, Any]  # StressAnalyticsResult as dict
+
+
+def create_stress_analytics_graph():
+    g = StateGraph(StressAnalyticsState)
+    g.add_node("analyze_stress", stress_analytics_node)
+    g.set_entry_point("analyze_stress")
+    g.add_edge("analyze_stress", END)
+    return g.compile()
+
+
+def run_stress_analytics(checkins: List[Dict[str, Any]]) -> str:
+    """
+    LangGraph entrypoint for Stress Analytics user story.
+    
+    Parameters
+    ----------
+    checkins : List[Dict[str, Any]]
+        Raw check-in records with mood, sleep, energy, workload, etc.
+    
+    Returns
+    -------
+    str
+        AI-generated summary of stress trends and patterns.
+    """
+    compiled = create_stress_analytics_graph()
+    out = compiled.invoke({
+        "checkins": checkins,
+        "stress_analytics": {},
+    })
+    
+    # Extract the result
+    analytics = out.get("stress_analytics") or {}
+    
+    # Build a readable summary from the StressAnalyticsResult
+    summary = analytics.get("summary", "No stress trend analysis available.")
+    key_drivers = analytics.get("key_drivers", [])
+    suggestions = analytics.get("suggestions", [])
+    
+    # Format as a nice text block
+    text = f"{summary}\n\n"
+    
+    if key_drivers:
+        text += "**Main stress drivers:**\n"
+        for driver in key_drivers:
+            text += f"- {driver}\n"
+        text += "\n"
+    
+    if suggestions:
+        text += "**Suggestions for next week:**\n"
+        for suggestion in suggestions:
+            text += f"- {suggestion}\n"
+    
+    return text.strip()
+
+
+# ---------------------------------------------------------------------
+# 📈 Productivity vs Stress Insights
+# ---------------------------------------------------------------------
+
+class ProductivityInsightsState(TypedDict, total=False):
+    records: List[Dict[str, Any]]  # {date, stress_score, productivity, ...}
+    productivity_insights: Dict[str, Any]  # ProductivityInsightsResult as dict
+
+
+def create_productivity_insights_graph():
+    g = StateGraph(ProductivityInsightsState)
+    g.add_node("analyze_productivity", productivity_insights_node)
+    g.set_entry_point("analyze_productivity")
+    g.add_edge("analyze_productivity", END)
+    return g.compile()
+
+
+def run_productivity_insights(records: List[Dict[str, Any]]) -> str:
+    """
+    LangGraph entrypoint for Productivity vs Stress Insights user story.
+    
+    Parameters
+    ----------
+    records : List[Dict[str, Any]]
+        Each record has: date, stress_score (0-100), productivity (0-10),
+        plus optional fields like mood, workload, prod_notes.
+    
+    Returns
+    -------
+    str
+        AI-generated insight about the relationship between stress and productivity.
+    """
+    compiled = create_productivity_insights_graph()
+    out = compiled.invoke({
+        "records": records,
+        "productivity_insights": {},
+    })
+    
+    # Extract the result
+    insights = out.get("productivity_insights") or {}
+    
+    correlation = insights.get("correlation_summary", "No productivity data available.")
+    risk_windows = insights.get("risk_windows", [])
+    suggestions = insights.get("suggestions", [])
+    
+    # Format as readable text
+    text = f"{correlation}\n\n"
+    
+    if risk_windows:
+        text += "**High-risk patterns:**\n"
+        for window in risk_windows:
+            text += f"- {window}\n"
+        text += "\n"
+    
+    if suggestions:
+        text += "**Recommendations:**\n"
+        for suggestion in suggestions:
+            text += f"- {suggestion}\n"
+    
+    return text.strip()
 
 
 class MotivationState(TypedDict, total=False):

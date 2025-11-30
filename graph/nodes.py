@@ -1524,6 +1524,237 @@ def morning_checkin_node(state: Dict[str, Any]) -> Dict[str, Any]:
     return state
 
 
+def stress_analytics_node(state: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    State in:
+      - checkins: List[dict]   # raw saved check-ins (date, mood, stress_score, etc.)
+    State out:
+      - stress_analytics: Dict[str, Any]  # StressAnalyticsResult as dict
+    """
+    checkins = state.get("checkins") or []
+
+    if not checkins:
+        result = StressAnalyticsResult(
+            summary="No stress check-ins yet, so there is nothing to analyze. "
+                    "Log a few Morning Wellness Check-Ins and I'll show your trends.",
+            key_drivers=[],
+            suggestions=[
+                "Start with 3–5 days of check-ins to establish a baseline.",
+                "Try to check in around the same time each day for more consistent data.",
+            ],
+            confidence=None,
+            confidence_note=None,
+        )
+        return {**state, "stress_analytics": result.model_dump()}  # ← Convert to dict
+
+    # Compact payload for the LLM (date + numeric score + a few categorical fields)
+    compact = []
+    for c in checkins:
+        ck = c.get("checkin") or c  # depending on how you stored it
+        compact.append(
+            {
+                "date": str(c.get("saved_at") or ck.get("date") or ""),
+                "stress_score": float(ck.get("stress_score", 0)),
+                "mood": ck.get("mood"),
+                "sleep_quality": ck.get("sleep_quality"),
+                "energy": ck.get("energy"),
+                "workload": ck.get("workload"),
+            }
+        )
+
+    system = (
+        "You are a data-aware corporate wellness coach. "
+        "You receive several days of stress data for one employee. "
+        "Return STRICT JSON with keys:\n"
+        "  - summary: short paragraph describing overall pattern.\n"
+        "  - key_drivers: list of 2–5 bullet phrases naming main causes of stress.\n"
+        "  - suggestions: list of 3–5 practical steps for the next week.\n"
+        "OPTIONAL keys:\n"
+        "  - confidence: float 0–1 about how reliable your interpretation is.\n"
+        "  - confidence_note: short explanation of your confidence.\n"
+        "Do not mention other people by name. Speak directly to the user.\n\n"
+        # ✅ ENHANCEMENT: Add uniqueness instruction
+        "IMPORTANT: Analyze the SPECIFIC patterns in this user's data. "
+        "Different input patterns (e.g., poor sleep vs heavy workload) should yield "
+        "meaningfully different insights. Avoid generic wellness advice."
+    )
+
+    user = json.dumps({"checkins": compact}, ensure_ascii=False, indent=2)
+
+    data: Dict[str, Any] = {}
+    try:
+        resp = client.chat.completions.create(
+            model=MODEL,
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+            temperature=0.6,  # ← Slightly higher for more varied responses (was 0.5)
+            top_p=0.9,
+            response_format={"type": "json_object"},
+            max_tokens=700,
+        )
+        data = json.loads(resp.choices[0].message.content or "{}")
+    except Exception as e:
+        data = {
+            "summary": f"Could not run full AI analysis right now ({e}). "
+                       "Here's a generic suggestion based on your logs.",
+            "key_drivers": [],
+            "suggestions": [],
+        }
+
+    summary = (data.get("summary") or "").strip()
+    key_drivers = _to_list(data.get("key_drivers"))
+    suggestions = _to_list(data.get("suggestions"))
+
+    # Confidence
+    conf = _extract_llm_conf(data)  # looks for 'confidence' in dict
+    if conf is None:
+        # crude heuristic: more days and more suggestions → slightly higher confidence
+        conf = _heuristic_conf_list(suggestions or key_drivers or [summary])
+
+    note = (data.get("confidence_note") or "").strip()
+    if not note and conf is not None:
+        if conf >= 0.8:
+            note = "High confidence: you have enough consistent check-ins to see clear patterns."
+        elif conf >= 0.5:
+            note = "Moderate confidence: patterns are emerging, but more days of data will help."
+        else:
+            note = "Low confidence: there are very few or very irregular check-ins."
+
+    result = StressAnalyticsResult(
+        summary=summary
+        or "Your stress pattern is still emerging. Keep logging check-ins for a clearer picture.",
+        key_drivers=key_drivers,
+        suggestions=suggestions or [
+            "Add at least 3 more check-ins next week.",
+            "Note big events (deadlines, conflicts) in the notes field after each check-in.",
+        ],
+        confidence=conf,
+        confidence_note=note,
+    )
+
+    return {**state, "stress_analytics": result.model_dump()}  # ← Convert to dict
+
+
+def productivity_insights_node(state: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    State in:
+      - records: List[dict]  # each: {date, stress_score (0–100), productivity (0–10 or 1–5)}
+    State out:
+      - productivity_insights: Dict[str, Any]  # ProductivityInsightsResult as dict
+    """
+    records = state.get("records") or []
+
+    if not records:
+        result = ProductivityInsightsResult(
+            correlation_summary=(
+                "There is no overlapping data for stress and productivity yet. "
+                "Log both for a few days to see how they interact."
+            ),
+            risk_windows=[],
+            suggestions=[
+                "Record a simple productivity score at the end of each workday.",
+                "Keep using Morning Wellness Check-Ins so we can line both up.",
+            ],
+            confidence=None,
+            confidence_note=None,
+        )
+        return {**state, "productivity_insights": result.model_dump()}
+
+    # ✅ FIX: Convert pandas Timestamps to strings before JSON serialization
+    clean_records = []
+    for record in records:
+        clean_record = {}
+        for key, value in record.items():
+            # Convert pandas Timestamp to ISO string
+            if hasattr(value, 'isoformat'):  # Works for both datetime and Timestamp
+                clean_record[key] = value.isoformat()
+            # Convert numpy/pandas numeric types to native Python types
+            elif hasattr(value, 'item'):  # numpy scalar
+                clean_record[key] = value.item()
+            else:
+                clean_record[key] = value
+        clean_records.append(clean_record)
+
+    system = (
+        "You are an analytics-focused wellness coach. "
+        "You receive daily records with a date, stress_score (0–100), "
+        "and productivity_score (e.g., 1–5 or 0–10). "
+        "Analyze the relationship.\n\n"
+        "Return STRICT JSON with keys:\n"
+        "  - correlation_summary: short paragraph describing how stress and productivity relate.\n"
+        "  - risk_windows: list of 2–4 phrases like 'very high stress (80+) on low productivity days'.\n"
+        "  - suggestions: list of 3–5 concrete tips to protect performance while managing stress.\n"
+        "OPTIONAL:\n"
+        "  - confidence: float 0–1 about how reliable this pattern is.\n"
+        "  - confidence_note: short explanation of that confidence.\n\n"
+        # ✅ ENHANCEMENT: Add uniqueness instruction
+        "IMPORTANT: Focus on the ACTUAL correlation in THIS user's data. "
+        "For example, if stress is high but productivity stays high, explain that pattern specifically. "
+        "If the pattern is inverse (high stress = low productivity), call that out clearly. "
+        "Avoid generic productivity advice—tailor everything to what you see in the numbers."
+    )
+
+    # ✅ Now use clean_records instead of records
+    user = json.dumps({"records": clean_records}, ensure_ascii=False, indent=2)
+
+    data: Dict[str, Any] = {}
+    try:
+        resp = client.chat.completions.create(
+            model=MODEL,
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+            temperature=0.5,  # Slightly higher for more nuanced analysis
+            top_p=0.9,
+            response_format={"type": "json_object"},
+            max_tokens=700,
+        )
+        data = json.loads(resp.choices[0].message.content or "{}")
+    except Exception as e:
+        data = {
+            "correlation_summary": (
+                f"Could not run full AI analysis right now ({e}). "
+                "In general, very high stress tends to reduce focus and productivity."
+            ),
+            "risk_windows": [],
+            "suggestions": [],
+        }
+
+    correlation_summary = (data.get("correlation_summary") or "").strip()
+    risk_windows = _to_list(data.get("risk_windows"))
+    suggestions = _to_list(data.get("suggestions"))
+
+    conf = _extract_llm_conf(data)
+    if conf is None:
+        conf = _heuristic_conf_list(suggestions or risk_windows or [correlation_summary])
+
+    note = (data.get("confidence_note") or "").strip()
+    if not note and conf is not None:
+        if conf >= 0.8:
+            note = "High confidence: there are enough overlapping days to see a clear pattern."
+        elif conf >= 0.5:
+            note = "Moderate confidence: some pattern exists, but more days will help confirm it."
+        else:
+            note = "Low confidence: limited overlapping data; treat this as a rough guide."
+
+    result = ProductivityInsightsResult(
+        correlation_summary=correlation_summary
+        or "The relationship between stress and productivity is not yet clear.",
+        risk_windows=risk_windows,
+        suggestions=suggestions or [
+            "Notice days when stress is high but productivity is low; capture a short note why.",
+            "Experiment with a brief reset (walk, breathing) before important tasks.",
+        ],
+        confidence=conf,
+        confidence_note=note,
+    )
+
+    return {**state, "productivity_insights": result.model_dump()}
+
+
 def motivational_message_node(state: Dict[str, Any]) -> Dict[str, Any]:
     """
     State:

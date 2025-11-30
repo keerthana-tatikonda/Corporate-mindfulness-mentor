@@ -26,6 +26,7 @@ from graph.graph import (
     run_morning_checkin,
     run_motivation_message,
     run_hr_insights,
+    run_stress_analytics, run_productivity_insights
 )
 
 from services.llm import MODEL, client
@@ -37,7 +38,7 @@ from services.productivity_storage import save_productivity, load_productivity
 
 
 from graph.break_graph import run_break_workflow, run_llm_break_workflow
-from graph.schemas import CheckIn
+from graph.schemas import CheckIn, StressAnalyticsResult, ProductivityInsightsResult
 
 from services.session import (
     init_session,
@@ -79,84 +80,6 @@ def render_confidence(provenance: str | None, confidence: float | None, key: str
     )
     st.progress(pct, text="Model confidence")
 
-
-
-# ---------------------------------------------------------
-# LLM helper: analyze stress trends for the personal dashboard
-# ---------------------------------------------------------
-from services.llm import client, MODEL  # if not already imported
-
-def analyze_stress_trends_with_llm(
-    weekly_rows: list[dict],
-    band_counts: list[dict],
-) -> tuple[str, float | None, str | None]:
-    """
-    Use the LLM to summarize stress trends.
-    Returns: (summary_text, confidence_0_1_or_None, confidence_note_or_None)
-    """
-    payload = {
-        "weekly": weekly_rows,      # e.g. [{week_start: "...", avg_stress: 42.0}, ...]
-        "bands": band_counts,       # e.g. [{band: "High", count: 5}, ...]
-    }
-
-    system = (
-        "You are a wellness analytics assistant. "
-        "You receive anonymized aggregate stress data (no individual info). "
-        "1) Briefly summarize recent trends in stress levels. "
-        "2) Mention whether they look improving, worsening, or stable. "
-        "3) Suggest 1–3 small, concrete things the user could try. "
-        "Optionally include 'confidence' (0..1) and 'confidence_note' in JSON."
-    )
-
-    try:
-        resp = client.chat.completions.create(
-            model=MODEL,
-            messages=[
-                {"role": "system", "content": system},
-                {
-                    "role": "user",
-                    "content": json.dumps(payload, ensure_ascii=False, indent=2),
-                },
-            ],
-            response_format={"type": "json_object"},
-            temperature=0.6,
-            max_tokens=400,
-        )
-        data = json.loads(resp.choices[0].message.content or "{}")
-
-        text = (data.get("summary") or data.get("text") or "").strip()
-        if not text:
-            # fallback if model didn't follow our JSON keys well
-            text = (resp.choices[0].message.content or "").strip()
-
-        # optional confidence handling
-        raw_conf = data.get("confidence")
-        conf = None
-        try:
-            if raw_conf is not None:
-                conf = max(0.0, min(1.0, float(raw_conf)))
-        except Exception:
-            conf = None
-
-        note = (data.get("confidence_note") or "").strip() or None
-
-        # cheap heuristic if no confidence provided
-        if conf is None:
-            # if we have at least a few weeks of data, be moderately confident
-            conf = 0.7 if len(weekly_rows) >= 3 else 0.5
-            if note is None:
-                note = "Confidence estimated from amount of data and structure of the response."
-
-        return text, conf, note
-
-    except Exception as e:
-        # fallback text, no confidence
-        fallback = (
-            "I couldn't fully analyze the trend right now, but you can still use the chart "
-            "to notice whether your stress is generally rising, falling, or staying steady. "
-            f"(Error: {e})"
-        )
-        return fallback, None, None
 
 
 
@@ -1229,9 +1152,662 @@ else:
 
 
 
-# ──────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────
+# 📊 Daily Productivity Tracking (NEW SECTION - Add after Morning Check-In)
+# ────────────────────────────────────────────────────────────────────
+
+st.markdown("---")
+st.markdown("## 📊 Daily Productivity Tracking")
+
+st.caption(
+    "Track your productivity each day to see how it relates to your stress levels. "
+    "Rate your overall productivity and add optional notes about what helped or hindered you."
+)
+
+with st.form("productivity_form", clear_on_submit=False):
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        prod_date = st.date_input(
+            "Date",
+            value=datetime.today(),
+            help="Which day are you tracking?"
+        )
+        
+        productivity_score = st.slider(
+            "Productivity Score (0-10)",
+            min_value=0,
+            max_value=10,
+            value=5,
+            help="0 = Completely unproductive, 10 = Extremely productive"
+        )
+    
+    with col2:
+        # Visual productivity level indicator
+        if productivity_score >= 8:
+            prod_label = "🚀 Highly Productive"
+            prod_color = "green"
+        elif productivity_score >= 6:
+            prod_label = "✅ Good Progress"
+            prod_color = "blue"
+        elif productivity_score >= 4:
+            prod_label = "⚡ Moderate Output"
+            prod_color = "orange"
+        else:
+            prod_label = "🐌 Low Productivity"
+            prod_color = "red"
+        
+        st.markdown(f"### {prod_label}")
+        st.progress(productivity_score / 10)
+    
+    prod_notes = st.text_area(
+        "What helped or hindered your productivity today? (optional)",
+        placeholder="e.g., 'Had a great focus session in the morning, but got interrupted by meetings in the afternoon'",
+        height=100
+    )
+    
+    submit_productivity = st.form_submit_button(
+        "💾 Save Today's Productivity",
+        use_container_width=True,
+        type="primary"
+    )
+
+if submit_productivity:
+    try:
+        from services.productivity_storage import save_productivity
+        
+        save_productivity(
+            date_iso=prod_date.isoformat(),
+            productivity=float(productivity_score),
+            notes=prod_notes.strip() or None
+        )
+        
+        st.success(f"✅ Productivity logged for {prod_date.strftime('%B %d, %Y')}")
+        st.balloons()
+        
+        # Show helpful tip after first few entries
+        all_prod = load_productivity() if callable(load_productivity) else []
+        if len(all_prod) >= 3:
+            st.info(
+                "💡 **Tip**: You now have enough data to see productivity trends! "
+                "Scroll down to the 'Productivity vs. Stress Insights' section to analyze patterns."
+            )
+        
+    except Exception as e:
+        st.error(f"Could not save productivity: {e}")
+
+# Show recent productivity entries
+try:
+    from services.productivity_storage import load_productivity
+    recent_prod = load_productivity() or []
+    
+    if recent_prod:
+        st.markdown("### 📋 Recent Productivity Logs")
+        
+        # Show last 5 entries
+        for entry in reversed(recent_prod[-5:]):
+            date_str = entry.get("date", "Unknown date")
+            score = entry.get("productivity", 0)
+            notes = entry.get("notes", "")
+            
+            with st.expander(f"📅 {date_str} — Score: {score}/10", expanded=False):
+                st.progress(float(score) / 10)
+                if notes:
+                    st.caption(f"Notes: {notes}")
+        
+        # Show total count
+        st.caption(f"Total productivity logs: {len(recent_prod)}")
+        
+except Exception as e:
+    st.warning(f"Could not load recent productivity entries: {e}")
 
 
+# ────────────────────────────────────────────────────────────────────
+# 📊 Stress-Level Tracking Dashboard
+# ────────────────────────────────────────────────────────────────────
+
+st.markdown("---")
+st.markdown("## 📊 Stress-Level Tracking Dashboard")
+
+all_checkins = load_checkins() if callable(load_checkins) else []
+
+if not all_checkins:
+    st.info(
+        "No saved Morning Wellness Check-Ins yet. "
+        "Log a few days above so we can show daily and weekly stress trends."
+    )
+else:
+    # Build a DataFrame for charts
+    df = build_stress_dataframe(all_checkins)
+    max_date = df["date"].max()
+    num_days = len(df)
+
+    # Show data summary
+    st.markdown(f"**📈 Tracking Data**: {num_days} days logged")
+    
+    if num_days < 3:
+        st.warning(
+            "⚠️ You have less than 3 days of data. Log at least 3-5 days "
+            "for more reliable AI insights."
+        )
+
+    st.markdown("#### ⏱ Time Window for Daily Stress")
+    days_window = st.radio(
+        "How much recent history do you want to see?",
+        options=[7, 14, 21, 30],
+        index=1,
+        format_func=lambda x: f"{x} days",
+        horizontal=True,
+        help="Controls how many days of stress check-ins are shown in the line chart.",
+    )
+
+    cutoff = max_date - pd.Timedelta(days=days_window - 1)
+    df_window = df[df["date"] >= cutoff]
+
+    col_daily, col_weekly = st.columns(2)
+
+    # Daily stress line chart
+    with col_daily:
+        st.markdown("#### 📈 Daily Stress (0–100)")
+        daily_chart = (
+            alt.Chart(df_window)
+            .mark_line(point=True)
+            .encode(
+                x=alt.X("date:T", title="Date"),
+                y=alt.Y("stress_score:Q", scale=alt.Scale(domain=[0, 100]), title="Stress Score"),
+                tooltip=[
+                    alt.Tooltip("date:T", title="Date"),
+                    alt.Tooltip("stress_score:Q", title="Stress Score"),
+                    alt.Tooltip("mood:N", title="Mood"),
+                    alt.Tooltip("sleep_quality:N", title="Sleep"),
+                    alt.Tooltip("energy:N", title="Energy"),
+                    alt.Tooltip("workload:N", title="Workload"),
+                ],
+            )
+            .properties(height=260)
+        )
+        st.altair_chart(daily_chart, use_container_width=True)
+
+    # Weekly average bars
+    with col_weekly:
+        st.markdown("#### 📊 Weekly Average Stress")
+        weekly = (
+            df.groupby("week_start", as_index=False)["stress_score"]
+            .mean()
+            .rename(columns={"stress_score": "avg_stress"})
+        )
+        weekly_chart = (
+            alt.Chart(weekly)
+            .mark_bar()
+            .encode(
+                x=alt.X("week_start:T", title="Week Starting"),
+                y=alt.Y("avg_stress:Q", scale=alt.Scale(domain=[0, 100]), title="Average Stress"),
+                tooltip=[
+                    alt.Tooltip("week_start:T", title="Week"),
+                    alt.Tooltip("avg_stress:Q", title="Avg Stress", format=".1f"),
+                ],
+            )
+            .properties(height=260)
+        )
+        st.altair_chart(weekly_chart, use_container_width=True)
+
+    # Quick stats
+    st.markdown("#### 📊 Quick Statistics")
+    col_stat1, col_stat2, col_stat3, col_stat4 = st.columns(4)
+    
+    avg_stress = df["stress_score"].mean()
+    max_stress = df["stress_score"].max()
+    min_stress = df["stress_score"].min()
+    latest_stress = df_window.iloc[-1]["stress_score"] if not df_window.empty else 0
+    
+    with col_stat1:
+        st.metric("Average Stress", f"{avg_stress:.1f}")
+    with col_stat2:
+        st.metric("Latest Score", f"{latest_stress:.1f}")
+    with col_stat3:
+        st.metric("Peak Stress", f"{max_stress:.1f}")
+    with col_stat4:
+        st.metric("Lowest Stress", f"{min_stress:.1f}")
+
+    # ────────────────────────────────────────────────────────────────
+    # 🤖 AI ANALYSIS - Only run when user clicks button
+    # ────────────────────────────────────────────────────────────────
+    st.markdown("---")
+    st.markdown("### 🤖 Mentor's View of Your Stress")
+    
+    st.caption(
+        "Get AI-powered insights about your stress patterns, main drivers, "
+        "and personalized suggestions based on your check-in history."
+    )
+
+    # Check if analysis already exists in session
+    analysis_exists = "last_stress_analysis" in st.session_state
+
+    # ✅ BUTTON - Only analyze when clicked
+    col_btn1, col_btn2 = st.columns([1, 3])
+    with col_btn1:
+        analyze_clicked = st.button(
+            "🔍 Analyze My Stress Patterns",
+            key="analyze_stress_btn",
+            type="primary",
+            use_container_width=True
+        )
+    with col_btn2:
+        if analysis_exists:
+            st.caption("💡 Analysis already generated. Click to refresh with latest data.")
+
+    if analyze_clicked:
+        with st.spinner("🧠 Analyzing your stress trends..."):
+            from graph.graph import create_stress_analytics_graph
+            
+            compiled = create_stress_analytics_graph()
+            result = compiled.invoke({
+                "checkins": all_checkins,
+                "stress_analytics": {},
+            })
+            
+            analytics_dict = result.get("stress_analytics") or {}
+
+        # Display the summary
+        summary_text = analytics_dict.get("summary", "No analysis available.")
+        st.info(summary_text)
+        
+        # Show key drivers
+        key_drivers = analytics_dict.get("key_drivers", [])
+        if key_drivers:
+            st.markdown("**Main stress drivers:**")
+            for driver in key_drivers:
+                st.markdown(f"• {driver}")
+        
+        # Show suggestions
+        suggestions = analytics_dict.get("suggestions", [])
+        if suggestions:
+            st.markdown("**Suggestions for next week:**")
+            for suggestion in suggestions:
+                st.markdown(f"• {suggestion}")
+        
+        # 🎯 Display confidence
+        render_confidence(
+            provenance=None,
+            confidence=analytics_dict.get("confidence"),
+            key="stress_analytics_conf",
+        )
+        conf_note = analytics_dict.get("confidence_note")
+        if conf_note:
+            st.caption(f"📊 Confidence note: {conf_note}")
+        
+        # Store in session state so it persists after button click
+        st.session_state["last_stress_analysis"] = analytics_dict
+        st.session_state["stress_analysis_timestamp"] = datetime.now()
+        
+        # ────────────────────────────────────────────────────────────
+        # 💬 User feedback on stress analytics
+        # ────────────────────────────────────────────────────────────
+        st.markdown("---")
+        st.markdown("#### 💬 Was this stress analysis helpful?")
+        
+        col_fb1, col_fb2, col_fb3 = st.columns(3)
+        with col_fb1:
+            if st.button("👍 Helpful", key="stress_helpful", use_container_width=True):
+                st.success("Thanks! We'll continue tracking your patterns.")
+                # Optional: save feedback to file
+                try:
+                    feedback_data = {
+                        "feature": "stress_analytics",
+                        "feedback": "helpful",
+                        "timestamp": datetime.now().isoformat(),
+                    }
+                    # You can implement save_feedback() later
+                    st.session_state["stress_feedback"] = "helpful"
+                except Exception:
+                    pass
+                    
+        with col_fb2:
+            if st.button("👎 Not helpful", key="stress_not_helpful", use_container_width=True):
+                st.warning("Thanks for the feedback. Try logging more days for better insights.")
+                st.session_state["stress_feedback"] = "not_helpful"
+                
+        with col_fb3:
+            if st.button("💡 Suggest improvement", key="stress_suggest", use_container_width=True):
+                st.session_state["show_stress_feedback_form"] = True
+        
+        # Show feedback form if user clicked suggest improvement
+        if st.session_state.get("show_stress_feedback_form"):
+            feedback_text = st.text_area(
+                "What would make this analysis more useful?",
+                key="stress_feedback_text",
+                placeholder="e.g., 'I'd like to see specific time patterns', 'Compare with last month', etc."
+            )
+            if st.button("Submit Feedback", key="submit_stress_feedback"):
+                if feedback_text.strip():
+                    st.success(f"✅ Feedback recorded: {feedback_text}")
+                    st.session_state["stress_feedback_detail"] = feedback_text
+                    st.session_state["show_stress_feedback_form"] = False
+                    st.rerun()
+    
+    # ────────────────────────────────────────────────────────────────
+    # Show previous analysis if it exists (after button was clicked)
+    # ────────────────────────────────────────────────────────────────
+    elif analysis_exists:
+        with st.expander("📋 View Last Analysis", expanded=False):
+            analytics_dict = st.session_state["last_stress_analysis"]
+            analysis_time = st.session_state.get("stress_analysis_timestamp")
+            
+            if analysis_time:
+                st.caption(f"Generated: {analysis_time.strftime('%B %d, %Y at %I:%M %p')}")
+            
+            summary_text = analytics_dict.get("summary", "")
+            if summary_text:
+                st.info(summary_text)
+            
+            key_drivers = analytics_dict.get("key_drivers", [])
+            if key_drivers:
+                st.markdown("**Main stress drivers:**")
+                for driver in key_drivers:
+                    st.markdown(f"• {driver}")
+            
+            suggestions = analytics_dict.get("suggestions", [])
+            if suggestions:
+                st.markdown("**Suggestions:**")
+                for suggestion in suggestions:
+                    st.markdown(f"• {suggestion}")
+            
+            # Show confidence from cached analysis
+            conf = analytics_dict.get("confidence")
+            if conf is not None:
+                st.progress(conf, text=f"AI Confidence: {int(conf * 100)}%")
+                conf_note = analytics_dict.get("confidence_note")
+                if conf_note:
+                    st.caption(conf_note)
+# ────────────────────────────────────────────────────────────────────
+# 📈 Productivity vs. Stress Insights
+# ────────────────────────────────────────────────────────────────────
+
+st.markdown("---")
+st.markdown("## 📈 Productivity vs. Stress Insights")
+
+st.caption(
+    "Analyze how your stress levels correlate with your productivity. "
+    "This helps identify when stress starts affecting your performance."
+)
+
+# Load productivity entries
+try:
+    from services.productivity_storage import load_productivity
+    productivity_entries = load_productivity() or []
+except Exception:
+    productivity_entries = []
+
+if not all_checkins or not productivity_entries:
+    st.info(
+        "📊 To see this comparison, you'll need both:\n\n"
+        "1. **Morning Wellness Check-Ins** (for stress data)\n"
+        "2. **Daily Productivity Tracking** (use the form above)\n\n"
+        "Log both for at least 3-5 days to see meaningful patterns."
+    )
+    
+    # Show what's missing
+    if not all_checkins:
+        st.warning("⚠️ Missing: Morning Check-Ins")
+    if not productivity_entries:
+        st.warning("⚠️ Missing: Productivity logs")
+        
+else:
+    stress_df = build_stress_dataframe(all_checkins)
+    prod_df = build_productivity_dataframe(productivity_entries)
+
+    # Inner join on date (only days where we have BOTH)
+    merged = stress_df.merge(
+        prod_df[["date", "productivity", "prod_notes"]],
+        on="date",
+        how="inner",
+        suffixes=("_stress", "_prod"),
+    )
+
+    if merged.empty:
+        st.warning(
+            "⚠️ We don't yet have any days where **both** stress and productivity were logged on the same day.\n\n"
+            "**What to do:**\n"
+            "1. Make sure you're logging Morning Check-Ins daily\n"
+            "2. Also log your productivity score each day\n"
+            "3. Come back after 3-5 days of consistent logging"
+        )
+    else:
+        num_overlapping = len(merged)
+        st.markdown(f"**📊 Overlapping Data**: {num_overlapping} days with both stress and productivity logged")
+        
+        if num_overlapping < 5:
+            st.warning(
+                f"⚠️ You have only {num_overlapping} days of overlapping data. "
+                "Log at least 5-7 days for more reliable correlation insights."
+            )
+
+        # Scale productivity to 0–100 so it overlays nicely with stress
+        merged["productivity_scaled"] = merged["productivity"] * 10.0
+
+        st.markdown("#### 🔗 Daily Stress vs. Productivity Over Time")
+
+        melted = merged.melt(
+            id_vars="date",
+            value_vars=["stress_score", "productivity_scaled"],
+            var_name="metric",
+            value_name="value",
+        )
+
+        # Create dual-axis chart
+        chart = (
+            alt.Chart(melted)
+            .mark_line(point=True)
+            .encode(
+                x=alt.X("date:T", title="Date"),
+                y=alt.Y("value:Q", scale=alt.Scale(domain=[0, 100]), title="Score (0-100)"),
+                color=alt.Color(
+                    "metric:N",
+                    title="Metric",
+                    scale=alt.Scale(
+                        domain=["stress_score", "productivity_scaled"],
+                        range=["#d62728", "#1f77b4"],  # red vs blue
+                    ),
+                    legend=alt.Legend(
+                        labelExpr="datum.label == 'stress_score' ? 'Stress' : 'Productivity (×10)'"
+                    )
+                ),
+                tooltip=[
+                    alt.Tooltip("date:T", title="Date"),
+                    alt.Tooltip("metric:N", title="Metric"),
+                    alt.Tooltip("value:Q", title="Score", format=".1f"),
+                ],
+            )
+            .properties(height=300)
+        )
+        st.altair_chart(chart, use_container_width=True)
+
+        st.caption(
+            "📊 **Note**: Productivity is rescaled to 0–100 for visualization (multiply by 10). "
+            "Look for periods where stress rises while productivity drops, or vice versa."
+        )
+
+        # Quick correlation stats
+        st.markdown("#### 📊 Quick Statistics")
+        col_stat1, col_stat2, col_stat3, col_stat4 = st.columns(4)
+        
+        avg_stress_overlap = merged["stress_score"].mean()
+        avg_prod = merged["productivity"].mean()
+        
+        # Calculate simple correlation
+        correlation = merged["stress_score"].corr(merged["productivity"])
+        
+        with col_stat1:
+            st.metric("Avg Stress", f"{avg_stress_overlap:.1f}")
+        with col_stat2:
+            st.metric("Avg Productivity", f"{avg_prod:.1f}/10")
+        with col_stat3:
+            correlation_label = "Negative" if correlation < -0.2 else "Positive" if correlation > 0.2 else "Weak"
+            st.metric("Correlation", correlation_label, f"{correlation:.2f}")
+        with col_stat4:
+            high_stress_days = len(merged[merged["stress_score"] >= 70])
+            st.metric("High Stress Days", high_stress_days)
+
+        # ────────────────────────────────────────────────────────────
+        # 🤖 AI ANALYSIS - Only run when user clicks
+        # ────────────────────────────────────────────────────────────
+        st.markdown("---")
+        st.markdown("### 🤖 Mentor's View of Stress vs Productivity")
+        
+        st.caption(
+            "Get AI insights about how your stress and productivity interact, "
+            "identify risk patterns, and receive personalized recommendations."
+        )
+
+        # Build the data payload
+        joined_records = []
+        for _, row in merged[["date", "stress_score", "productivity", "mood", "workload", "prod_notes"]].iterrows():
+            record = {}
+            for col in row.index:
+                value = row[col]
+                # Convert pandas Timestamp to ISO string
+                if pd.api.types.is_datetime64_any_dtype(type(value)) or hasattr(value, 'isoformat'):
+                    record[col] = value.isoformat() if hasattr(value, 'isoformat') else str(value)
+                # Convert numpy/pandas numeric types to native Python types
+                elif hasattr(value, 'item'):  # numpy scalar
+                    record[col] = value.item()
+                # Handle NaN/None
+                elif pd.isna(value):
+                    record[col] = None
+                else:
+                    record[col] = value
+            
+            joined_records.append(record)
+
+        # Check if analysis exists
+        analysis_exists = "last_productivity_analysis" in st.session_state
+
+        # ✅ BUTTON - Only analyze when clicked
+        col_btn1, col_btn2 = st.columns([1, 3])
+        with col_btn1:
+            analyze_clicked = st.button(
+                "🔍 Analyze Correlation",
+                key="analyze_prod_btn",
+                type="primary",
+                use_container_width=True
+            )
+        with col_btn2:
+            if analysis_exists:
+                st.caption("💡 Analysis already generated. Click to refresh with latest data.")
+
+        if analyze_clicked:
+            with st.spinner("🧠 Analyzing how stress and productivity relate..."):
+                from graph.graph import create_productivity_insights_graph
+                
+                compiled = create_productivity_insights_graph()
+                result = compiled.invoke({
+                    "records": joined_records,
+                    "productivity_insights": {},
+                })
+                
+                insights_dict = result.get("productivity_insights") or {}
+
+            # Display correlation summary
+            correlation_summary = insights_dict.get("correlation_summary", "No analysis available.")
+            st.info(correlation_summary)
+            
+            # Show risk windows
+            risk_windows = insights_dict.get("risk_windows", [])
+            if risk_windows:
+                st.markdown("**⚠️ High-risk patterns identified:**")
+                for window in risk_windows:
+                    st.markdown(f"• {window}")
+            
+            # Show suggestions
+            suggestions = insights_dict.get("suggestions", [])
+            if suggestions:
+                st.markdown("**💡 Recommendations to protect performance:**")
+                for suggestion in suggestions:
+                    st.markdown(f"• {suggestion}")
+            
+            # 🎯 Display confidence
+            render_confidence(
+                provenance=None,
+                confidence=insights_dict.get("confidence"),
+                key="productivity_insights_conf",
+            )
+            conf_note = insights_dict.get("confidence_note")
+            if conf_note:
+                st.caption(f"📊 Confidence note: {conf_note}")
+            
+            # Store in session state
+            st.session_state["last_productivity_analysis"] = insights_dict
+            st.session_state["productivity_analysis_timestamp"] = datetime.now()
+            
+            # ────────────────────────────────────────────────────────
+            # 💬 User feedback
+            # ────────────────────────────────────────────────────────
+            st.markdown("---")
+            st.markdown("#### 💬 Did these insights help you?")
+            
+            col_fb1, col_fb2, col_fb3 = st.columns(3)
+            with col_fb1:
+                if st.button("👍 Helpful", key="prod_helpful", use_container_width=True):
+                    st.success("Great! Keep logging both metrics to refine the analysis.")
+                    st.session_state["prod_feedback"] = "helpful"
+                    
+            with col_fb2:
+                if st.button("👎 Not helpful", key="prod_not_helpful", use_container_width=True):
+                    st.warning("Thanks! More overlapping data will improve accuracy.")
+                    st.session_state["prod_feedback"] = "not_helpful"
+                    
+            with col_fb3:
+                if st.button("💡 Suggest improvement", key="prod_suggest", use_container_width=True):
+                    st.session_state["show_prod_feedback_form"] = True
+            
+            # Show feedback form
+            if st.session_state.get("show_prod_feedback_form"):
+                feedback_text = st.text_area(
+                    "How can we make this more actionable?",
+                    key="prod_feedback_text",
+                    placeholder="e.g., 'Show specific times when stress hurts productivity most', 'Compare weekdays vs weekends', etc."
+                )
+                if st.button("Submit Feedback", key="submit_prod_feedback"):
+                    if feedback_text.strip():
+                        st.success(f"✅ Feedback recorded: {feedback_text}")
+                        st.session_state["prod_feedback_detail"] = feedback_text
+                        st.session_state["show_prod_feedback_form"] = False
+                        st.rerun()
+        
+        # ────────────────────────────────────────────────────────────
+        # Show cached result if available
+        # ────────────────────────────────────────────────────────────
+        elif analysis_exists:
+            with st.expander("📋 View Last Analysis", expanded=False):
+                insights_dict = st.session_state["last_productivity_analysis"]
+                analysis_time = st.session_state.get("productivity_analysis_timestamp")
+                
+                if analysis_time:
+                    st.caption(f"Generated: {analysis_time.strftime('%B %d, %Y at %I:%M %p')}")
+                
+                correlation_summary = insights_dict.get("correlation_summary", "")
+                if correlation_summary:
+                    st.info(correlation_summary)
+                
+                risk_windows = insights_dict.get("risk_windows", [])
+                if risk_windows:
+                    st.markdown("**High-risk patterns:**")
+                    for window in risk_windows:
+                        st.markdown(f"• {window}")
+                
+                suggestions = insights_dict.get("suggestions", [])
+                if suggestions:
+                    st.markdown("**Recommendations:**")
+                    for suggestion in suggestions:
+                        st.markdown(f"• {suggestion}")
+                
+                # Show confidence
+                conf = insights_dict.get("confidence")
+                if conf is not None:
+                    st.progress(conf, text=f"AI Confidence: {int(conf * 100)}%")
+                    conf_note = insights_dict.get("confidence_note")
+                    if conf_note:
+                        st.caption(conf_note)
 
 # ──────────────────────────────────────────────────────────────
 # 📝 Weekly Reflection Journal

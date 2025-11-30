@@ -891,5 +891,29 @@
     "confidence": 0.85,
     "confidence_note": "These activities are tailored specifically for improving focus based on established mindfulness techniques that have proven effectiveness in enhancing concentration.",
     "saved_at": 1764533832
+  },
+  {
+    "goal": "reduce daily stress",
+    "suggested_activities": [
+      "Begin each day with a 5-minute guided breathing exercise using an app like Headspace, focusing on inhaling deeply and exhaling slowly to set a calm tone for the day.",
+      "During lunch breaks, take a 10-minute mindful walk outside, paying attention to your surroundings and sensations in your body to reset your mind.",
+      "Implement a 'gratitude pause' at the end of each workday where you write down three things that went well during the day, helping shift focus from stressors to positive experiences."
+    ],
+    "ai_summary": "This plan provides daily mindfulness activities tailored specifically to reducing stress. It encourages beginning the day with breathing techniques, taking mindful breaks during work hours, and ending the day with reflections on gratitude.",
+    "confidence": 0.8,
+    "confidence_note": "These activities target stress reduction by promoting awareness and positivity throughout the user's daily routine.",
+    "saved_at": 1764542209
+  },
+  {
+    "goal": "improve focus",
+    "suggested_activities": [
+      "Practice a 10-minute guided focus meditation every Monday morning using an app like Headspace or Calm, concentrating on breath awareness to enhance concentration for the week ahead.",
+      "Engage in a weekly 'Mindful Focus Hour' where you work on a single task without interruptions, utilizing techniques from the Pomodoro method (25 minutes focused work followed by 5 minutes of mindful breathing).",
+      "Incorporate a 'Focus Walk' each Friday during lunch; spend 15-20 minutes walking mindfully outdoors, paying close attention to your surroundings and sensations, allowing your mind to clear before returning to your tasks."
+    ],
+    "ai_summary": "This personalized plan includes structured mindfulness practices aimed at enhancing focus through meditation, dedicated task time management, and mindful walking. Each activity is designed to help sharpen concentration over time.",
+    "confidence": 0.78,
+    "confidence_note": "The activities are specifically designed for improving focus within a corporate context and align with practical weekly implementation.",
+    "saved_at": 1764542916
   }
 ]

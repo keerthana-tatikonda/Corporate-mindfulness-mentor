@@ -126,12 +126,16 @@ class CheckInAdjustment(BaseModel):
 
 
 class StressAnalyticsResult(BaseModel):
-    analysis: str
-    confidence: Optional[float] = None
+    summary: str
+    key_drivers: List[str] = []
+    suggestions: List[str] = []
+    confidence: Optional[float] = Field(default=None, ge=0.0, le=1.0)
     confidence_note: Optional[str] = None
 
 
 class ProductivityInsightsResult(BaseModel):
-    analysis: str
-    confidence: Optional[float] = None
+    correlation_summary: str
+    risk_windows: List[str] = []      # e.g. "Late evenings after 20:00", "Fridays"
+    suggestions: List[str] = []
+    confidence: Optional[float] = Field(default=None, ge=0.0, le=1.0)
     confidence_note: Optional[str] = None
