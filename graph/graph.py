@@ -1,15 +1,33 @@
 # graph/graph.py
+
+from typing import TypedDict, List, Optional, Dict, Any
+
 from langgraph.graph import StateGraph, END
-from typing import TypedDict, List, Optional, Dict
+
+from services.llm import client, MODEL
 from .schemas import (
-    Goal, PlanResponse, DecomposedPlan,
-    UserProfile, PersonalizedPlanRequest, PersonalizedPlanResponse,
-    WorkloadReport, AdaptedPlanResponse
+    Goal,
+    PlanResponse,
+    DecomposedPlan,
+    UserProfile,
+    PersonalizedPlanRequest,
+    PersonalizedPlanResponse,
+    WorkloadReport,
+    AdaptedPlanResponse,
+    CheckIn,
+    DayAdjustment,  # <-- this exists in schemas.py
 )
 from .nodes import (
-    generate_plan_node, generate_decomposed_plan,
-    personalize_plan_node, adapt_plan_node
+    generate_plan_node,
+    generate_decomposed_plan,
+    personalize_plan_node,
+    adapt_plan_node,
+    morning_checkin_node,
 )
+
+# ---------------------------------------------------------------------
+# 🧭 Goal Creation
+# ---------------------------------------------------------------------
 
 
 class GoalState(TypedDict):
@@ -26,29 +44,31 @@ class GoalState(TypedDict):
 def create_goal_graph():
     """Create the LangGraph workflow for goal creation."""
     workflow = StateGraph(GoalState)
-
     workflow.add_node("generate_plan", generate_plan_node)
     workflow.set_entry_point("generate_plan")
     workflow.add_edge("generate_plan", END)
-
     return workflow.compile()
 
 
-def run_goal_creation(goal_name: str, duration_type: str, description: str = "") -> PlanResponse:
+def run_goal_creation(
+    goal_name: str, duration_type: str, description: str = ""
+) -> PlanResponse:
     """
     Run the goal creation workflow using LangGraph.
     """
     graph = create_goal_graph()
-    result = graph.invoke({
-        "goal_name": goal_name,
-        "duration_type": duration_type,
-        "description": description,
-        "activities": [],
-        "summary": "",
-        # 👇 seed confidence fields so they stay in the graph state
-        "confidence": None,
-        "confidence_note": None,
-    })
+    result = graph.invoke(
+        {
+            "goal_name": goal_name,
+            "duration_type": duration_type,
+            "description": description,
+            "activities": [],
+            "summary": "",
+            # seed confidence fields so they stay in the graph state
+            "confidence": None,
+            "confidence_note": None,
+        }
+    )
 
     return PlanResponse(
         goal=result["goal_name"],
@@ -59,7 +79,9 @@ def run_goal_creation(goal_name: str, duration_type: str, description: str = "")
     )
 
 
-def run_goal_decomposition(goal_name: str, duration_type: str, description: str = "") -> DecomposedPlan:
+def run_goal_decomposition(
+    goal_name: str, duration_type: str, description: str = ""
+) -> DecomposedPlan:
     """
     High-level helper: create base plan and then a decomposed plan.
     """
@@ -67,10 +89,18 @@ def run_goal_decomposition(goal_name: str, duration_type: str, description: str 
     base = run_goal_creation(goal_name, duration_type, description)
 
     # 2) ask the node to break it into subgoals
-    g = Goal(goal_name=goal_name, duration_type=duration_type, description=description or None)
+    g = Goal(
+        goal_name=goal_name,
+        duration_type=duration_type,
+        description=description or None,
+    )
     return generate_decomposed_plan(g, base)
 
-# --- Profile Personalization ---
+
+# ---------------------------------------------------------------------
+# 🎯 Profile Personalization
+# ---------------------------------------------------------------------
+
 
 class PersonalizeState(TypedDict, total=False):
     goal_name: str
@@ -79,11 +109,11 @@ class PersonalizeState(TypedDict, total=False):
     profile: UserProfile  # Pydantic object
     p_activities: List[str]
     p_summary: str
-    task_feedback: Dict[str, str]   # optional; activity -> "helpful" | "not helpful"
-    completion: Dict[str, bool]     # optional; activity -> completed?
-    #confidence
+    task_feedback: Dict[str, str]  # activity -> "helpful" | "not helpful"
+    completion: Dict[str, bool]  # activity -> completed?
     p_confidence: Optional[float]
     p_confidence_note: Optional[str]
+
 
 def create_personalize_graph():
     g = StateGraph(PersonalizeState)
@@ -92,6 +122,7 @@ def create_personalize_graph():
     g.add_edge("personalize", END)
     return g.compile()
 
+
 def run_personalized_goal(
     goal: Goal,
     profile: UserProfile,
@@ -99,30 +130,33 @@ def run_personalized_goal(
     completion: Optional[Dict[str, bool]] = None,
 ) -> PersonalizedPlanResponse:
     graph = create_personalize_graph()
-    out = graph.invoke({
-        "goal_name": goal.goal_name,
-        "duration_type": goal.duration_type,
-        "description": goal.description or "",
-        "profile": profile,
-        "task_feedback": task_feedback or {},
-        "completion": completion or {},
-        "p_activities": [],
-        "p_summary": "",
-        # NEW seeds so these exist in state
-        "p_confidence": None,
-        "p_confidence_note": None,
-    })
+    out = graph.invoke(
+        {
+            "goal_name": goal.goal_name,
+            "duration_type": goal.duration_type,
+            "description": goal.description or "",
+            "profile": profile,
+            "task_feedback": task_feedback or {},
+            "completion": completion or {},
+            "p_activities": [],
+            "p_summary": "",
+            "p_confidence": None,
+            "p_confidence_note": None,
+        }
+    )
     return PersonalizedPlanResponse(
         goal=goal.goal_name,
         activities=out["p_activities"],
         summary=out["p_summary"],
-        # NEW: surface confidence in the response model
         confidence=out.get("p_confidence"),
         confidence_note=out.get("p_confidence_note"),
     )
 
 
-# --- Workload-Based Adaptation ---
+# ---------------------------------------------------------------------
+# ⚙️ Workload-Based Adaptation
+# ---------------------------------------------------------------------
+
 
 class AdaptState(TypedDict, total=False):
     goal_name: str
@@ -153,38 +187,38 @@ def run_workload_adaptation(
     completion: Optional[Dict[str, bool]] = None,
 ) -> AdaptedPlanResponse:
     graph = create_adaptation_graph()
-    out = graph.invoke({
-        "goal_name": goal.goal_name,
-        "duration_type": goal.duration_type,
-        "base_activities": base_activities,
-        "workload": workload,
-        "task_feedback": task_feedback or {},
-        "completion": completion or {},
-        "adapted_plan": [],
-        "adapted_rationale": "",
-                # confidence
-        "adapted_confidence": None,
-        "adapted_confidence_note": None,
-    })
+    out = graph.invoke(
+        {
+            "goal_name": goal.goal_name,
+            "duration_type": goal.duration_type,
+            "base_activities": base_activities,
+            "workload": workload,
+            "task_feedback": task_feedback or {},
+            "completion": completion or {},
+            "adapted_plan": [],
+            "adapted_rationale": "",
+            "adapted_confidence": None,
+            "adapted_confidence_note": None,
+        }
+    )
     return AdaptedPlanResponse(
         goal=goal.goal_name,
         day_plan=out["adapted_plan"],
         rationale=out["adapted_rationale"],
-                # confidence
         confidence=out.get("adapted_confidence"),
         confidence_note=out.get("adapted_confidence_note"),
     )
 
 
-# --- Morning Check-In Workflow (additive) ---
-from typing import TypedDict
-from langgraph.graph import StateGraph, END
-from .nodes import morning_checkin_node
-from .schemas import CheckIn, DayAdjustment
+# ---------------------------------------------------------------------
+# 🌅 Morning Check-In (LangGraph version, using DayAdjustment)
+# ---------------------------------------------------------------------
+
 
 class CheckInState(TypedDict, total=False):
     checkin: dict
     day_adjustment: dict
+
 
 def create_checkin_graph():
     g = StateGraph(CheckInState)
@@ -193,9 +227,121 @@ def create_checkin_graph():
     g.add_edge("morning_checkin", END)
     return g.compile()
 
+
 def run_morning_checkin(checkin: CheckIn) -> DayAdjustment:
+    """
+    Run the morning check-in workflow via LangGraph and return a DayAdjustment
+    Pydantic model (summary, focus_for_today, risk_flags, etc.).
+    """
     compiled = create_checkin_graph()
     result = compiled.invoke({"checkin": checkin.model_dump()})
     da = result.get("day_adjustment") or {}
     return DayAdjustment(**da)
 
+
+# ---------------------------------------------------------------------
+# 📊 Stress Analytics (trend explanation)
+# ---------------------------------------------------------------------
+
+
+def _format_stress_history(checkins: List[Dict[str, Any]]) -> str:
+    """
+    Convert raw check-in dicts (from checkin_storage) into a compact text
+    summary for the model.
+    """
+    lines = []
+    for idx, item in enumerate(checkins, start=1):
+        c = (item or {}).get("checkin") or item  # allow both shapes
+        mood = c.get("mood", "unknown")
+        sleep = c.get("sleep_quality", "unknown")
+        energy = c.get("energy", "unknown")
+        workload = c.get("workload", "unknown")
+        notes = c.get("notes", "")
+        lines.append(
+            f"Day {idx}: mood={mood}, sleep={sleep}, energy={energy}, "
+            f"workload={workload}, notes={notes}"
+        )
+    return "\n".join(lines)
+
+
+def run_stress_analytics(all_checkins: List[Dict[str, Any]]) -> str:
+    """
+    Given the full list from load_checkins(), ask the LLM to analyze
+    stress trends and return a friendly explanation string.
+    (Used by the Stress-Level Tracking Dashboard.)
+    """
+    if not all_checkins:
+        return (
+            "You don't have any check-ins yet. Once you log a few days, "
+            "I'll summarize your stress trends."
+        )
+
+    history_text = _format_stress_history(all_checkins)
+
+    system_msg = (
+        "You are an expert stress-management coach. "
+        "Analyze the user's stress history over multiple days. "
+        "Identify trends, high-risk patterns, and give 3–5 concrete suggestions. "
+        "Keep it under 200 words, friendly and practical."
+    )
+    user_msg = f"Here is the recent stress history:\n{history_text}"
+
+    resp = client.responses.create(
+        model=MODEL,
+        input=[
+            {"role": "system", "content": system_msg},
+            {"role": "user", "content": user_msg},
+        ],
+    )
+    return resp.output[0].content[0].text.strip()
+
+
+# ---------------------------------------------------------------------
+# 📉 Productivity vs Stress Insights
+# ---------------------------------------------------------------------
+
+
+def run_productivity_insights(joined_records: List[Dict[str, Any]]) -> str:
+    """
+    joined_records is the list of dicts from your joined_df in app.py,
+    one item per day having both stress_score and productivity.
+    Returns a short explanation of how stress and productivity relate.
+    """
+    if not joined_records:
+        return (
+            "I don't yet have any days where both stress and productivity "
+            "were logged. Once you record both for the same day, I'll help "
+            "you understand how they relate."
+        )
+
+    # Build a compact table for the model
+    rows = []
+    for i, row in enumerate(joined_records, start=1):
+        date = row.get("date")
+        stress = row.get("stress_score")
+        prod = row.get("productivity")
+        mood = row.get("mood", "")
+        workload = row.get("workload", "")
+        notes = row.get("prod_notes", "")
+        rows.append(
+            f"Day {i} ({date}): stress={stress}, productivity={prod}, "
+            f"mood={mood}, workload={workload}, notes={notes}"
+        )
+    history = "\n".join(rows)
+
+    system_msg = (
+        "You are a performance coach. Analyze how stress relates to "
+        "productivity based on the daily records. "
+        "Look for thresholds where productivity drops as stress rises, "
+        "and give 3–5 specific recommendations for balancing both."
+    )
+    user_msg = f"Here is the combined stress/productivity history:\n{history}"
+
+    resp = client.responses.create(
+        model=MODEL,
+        input=[
+            {"role": "system", "content": system_msg},
+            {"role": "user", "content": user_msg},
+        ],
+    )
+    return resp.output[0].content[0].text.strip()

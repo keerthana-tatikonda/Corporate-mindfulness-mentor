@@ -755,5 +755,29 @@
     "confidence": 0.75,
     "confidence_note": "These activities are specifically designed to address your goal of reducing daily stress through varied mindfulness practices that can be sustained weekly.",
     "saved_at": 1764388255
+  },
+  {
+    "goal": "reduce stress",
+    "suggested_activities": [
+      "Morning Gratitude Journaling: Spend 5-10 minutes each morning writing down three things you are grateful for to foster a positive mindset.",
+      "Midday Breath Focus: Set aside 5 minutes at noon to practice deep breathing exercises. Inhale for a count of four, hold for four, and exhale for six. Repeat this cycle until you feel your stress levels decrease.",
+      "Evening Mindful Walk: Dedicate 15-20 minutes in the evening to take a mindful walk outdoors, paying close attention to the sights, sounds, and sensations around you to ground yourself after a busy day."
+    ],
+    "ai_summary": "This plan includes daily activities that promote gratitude, deep breathing, and mindfulness through walking, all aimed at reducing stress effectively throughout your day.",
+    "confidence": 0.85,
+    "confidence_note": "These activities are specifically designed to address stress reduction based on established mindfulness practices.",
+    "saved_at": 1764459470
+  },
+  {
+    "goal": "reduce stress",
+    "suggested_activities": [
+      "5-minute guided breathing exercise before starting work, focusing on deep inhalations and slow exhalations to center your mind.",
+      "Engage in a 10-minute nature walk during lunch breaks, paying close attention to the sounds, sights, and smells around you to promote mindfulness.",
+      "At the end of the day, spend 10 minutes journaling about what stressed you and how you responded, along with three things you are grateful for to shift focus."
+    ],
+    "ai_summary": "This plan incorporates short, targeted activities designed to reduce stress through mindful awareness and reflection. Each activity is structured around your daily schedule.",
+    "confidence": 0.85,
+    "confidence_note": "The activities are tailored for workplace integration and provide immediate stress relief options.",
+    "saved_at": 1764459485
   }
 ]

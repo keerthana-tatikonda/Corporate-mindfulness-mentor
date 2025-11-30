@@ -4,7 +4,7 @@ import json
 import re
 import hashlib, random, uuid
 import os
-
+from .schemas import CheckInAdjustment
 from services.llm import client, MODEL
 #Gola creation, Profile personalisation and Workload adaptation
 from .schemas import (
@@ -12,7 +12,14 @@ from .schemas import (
     UserProfile, PersonalizedPlanRequest, PersonalizedPlanResponse,
     WorkloadReport, AdaptedPlanResponse
 )
-
+from .schemas import CheckInAdjustment
+from services.llm import client, MODEL
+from .schemas import (
+    CheckIn,
+    CheckInAdjustment,
+    StressAnalyticsResult,
+    ProductivityInsightsResult,
+)
 
 from datetime import datetime, time
 from .schemas import DayAdjustment

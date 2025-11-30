@@ -1,6 +1,7 @@
 from pydantic import BaseModel,Field
 from typing import List, Optional
 
+
 class Goal(BaseModel):
     goal_name: str
     duration_type: str  # "daily", "weekly", or "monthly"
@@ -81,3 +82,56 @@ class AdaptedPlanResponse(BaseModel):
     confidence: Optional[float] = Field(default=None, ge=0.0, le=1.0)
     confidence_note: Optional[str] = None
 
+
+
+
+class CheckIn(BaseModel):
+    mood: Optional[str] = Field(
+        default=None,
+        description="User mood label: calm, neutral, anxious, frustrated",
+    )
+    sleep_quality: Optional[str] = Field(
+        default=None,
+        description="Sleep quality: poor, ok, great",
+    )
+    energy: Optional[str] = Field(
+        default=None,
+        description="Energy level: low, medium, high",
+    )
+    workload: Optional[str] = Field(
+        default=None,
+        description="Workload level: light, normal, heavy",
+    )
+    notes: Optional[str] = Field(default=None, description="Free-text notes")
+
+
+class CheckInAdjustment(BaseModel):
+    summary: str = Field(..., description="Short AI summary for today")
+    focus_for_today: List[str] = Field(
+        default_factory=list,
+        description="Concrete activities to focus on today",
+    )
+    risk_flags: List[str] = Field(
+        default_factory=list,
+        description="Any stress-risk warnings to highlight",
+    )
+    confidence: Optional[float] = Field(
+        default=None,
+        description="0–1 confidence score from the model (optional)",
+    )
+    confidence_note: Optional[str] = Field(
+        default=None,
+        description="Explanation of the confidence level",
+    )
+
+
+class StressAnalyticsResult(BaseModel):
+    analysis: str
+    confidence: Optional[float] = None
+    confidence_note: Optional[str] = None
+
+
+class ProductivityInsightsResult(BaseModel):
+    analysis: str
+    confidence: Optional[float] = None
+    confidence_note: Optional[str] = None
