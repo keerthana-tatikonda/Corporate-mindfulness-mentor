@@ -14,7 +14,7 @@ st.set_page_config(
     page_icon="🧘",
     layout="centered",
 )
-
+from services.mentor_graph import run_mentor_conversation
 # ──────────────────────────────────────────────────────────────
 # Imports from your project
 # ──────────────────────────────────────────────────────────────
@@ -24,8 +24,8 @@ from graph.graph import (
     run_personalized_goal,
     run_workload_adaptation,
     run_morning_checkin,
-    run_stress_analytics,
-    run_productivity_insights,
+    run_motivation_message,
+    run_hr_insights,
 )
 
 from services.llm import MODEL, client
@@ -78,6 +78,87 @@ def render_confidence(provenance: str | None, confidence: float | None, key: str
         unsafe_allow_html=True,
     )
     st.progress(pct, text="Model confidence")
+
+
+
+# ---------------------------------------------------------
+# LLM helper: analyze stress trends for the personal dashboard
+# ---------------------------------------------------------
+from services.llm import client, MODEL  # if not already imported
+
+def analyze_stress_trends_with_llm(
+    weekly_rows: list[dict],
+    band_counts: list[dict],
+) -> tuple[str, float | None, str | None]:
+    """
+    Use the LLM to summarize stress trends.
+    Returns: (summary_text, confidence_0_1_or_None, confidence_note_or_None)
+    """
+    payload = {
+        "weekly": weekly_rows,      # e.g. [{week_start: "...", avg_stress: 42.0}, ...]
+        "bands": band_counts,       # e.g. [{band: "High", count: 5}, ...]
+    }
+
+    system = (
+        "You are a wellness analytics assistant. "
+        "You receive anonymized aggregate stress data (no individual info). "
+        "1) Briefly summarize recent trends in stress levels. "
+        "2) Mention whether they look improving, worsening, or stable. "
+        "3) Suggest 1–3 small, concrete things the user could try. "
+        "Optionally include 'confidence' (0..1) and 'confidence_note' in JSON."
+    )
+
+    try:
+        resp = client.chat.completions.create(
+            model=MODEL,
+            messages=[
+                {"role": "system", "content": system},
+                {
+                    "role": "user",
+                    "content": json.dumps(payload, ensure_ascii=False, indent=2),
+                },
+            ],
+            response_format={"type": "json_object"},
+            temperature=0.6,
+            max_tokens=400,
+        )
+        data = json.loads(resp.choices[0].message.content or "{}")
+
+        text = (data.get("summary") or data.get("text") or "").strip()
+        if not text:
+            # fallback if model didn't follow our JSON keys well
+            text = (resp.choices[0].message.content or "").strip()
+
+        # optional confidence handling
+        raw_conf = data.get("confidence")
+        conf = None
+        try:
+            if raw_conf is not None:
+                conf = max(0.0, min(1.0, float(raw_conf)))
+        except Exception:
+            conf = None
+
+        note = (data.get("confidence_note") or "").strip() or None
+
+        # cheap heuristic if no confidence provided
+        if conf is None:
+            # if we have at least a few weeks of data, be moderately confident
+            conf = 0.7 if len(weekly_rows) >= 3 else 0.5
+            if note is None:
+                note = "Confidence estimated from amount of data and structure of the response."
+
+        return text, conf, note
+
+    except Exception as e:
+        # fallback text, no confidence
+        fallback = (
+            "I couldn't fully analyze the trend right now, but you can still use the chart "
+            "to notice whether your stress is generally rising, falling, or staying steady. "
+            f"(Error: {e})"
+        )
+        return fallback, None, None
+
+
 
 
 # ──────────────────────────────────────────────────────────────
@@ -1015,6 +1096,8 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
+
+
 # ──────────────────────────────────────────────────────────────
 # 🌅 Morning Wellness Check-In
 # ──────────────────────────────────────────────────────────────
@@ -1081,395 +1164,9 @@ if do_checkin:
             st.caption("Flags: " + ", ".join(adj.risk_flags))
 
 
-# ──────────────────────────────────────────────────────────────
-# 📊 Stress-Level Tracking Dashboard
-# ──────────────────────────────────────────────────────────────
-st.markdown("---")
-st.markdown("## 📊 Stress-Level Tracking Dashboard")
-
-all_checkins = load_checkins() if callable(load_checkins) else []
-
-if not all_checkins:
-    st.info(
-        "No saved Morning Wellness Check-Ins yet. "
-        "Log a few days above so we can show daily and weekly stress trends."
-    )
-else:
-    df = build_stress_dataframe(all_checkins)
-    max_date = df["date"].max()
-
-    st.markdown("#### ⏱ Time Window for Daily Stress")
-    days_window = st.radio(
-        "How much recent history do you want to see?",
-        options=[7, 14, 21, 30],
-        index=1,
-        format_func=lambda x: f"{x} days",
-        horizontal=True,
-        help="Controls how many days of stress check-ins are shown in the line chart.",
-    )
-
-    cutoff = max_date - pd.Timedelta(days=days_window - 1)
-    df_window = df[df["date"] >= cutoff]
-
-    col_daily, col_weekly = st.columns(2)
-
-    with col_daily:
-        st.markdown("#### 📈 Daily Stress (0–100)")
-        daily_chart = (
-            alt.Chart(df_window)
-            .mark_line(point=True)
-            .encode(
-                x="date:T",
-                y=alt.Y("stress_score:Q", scale=alt.Scale(domain=[0, 100])),
-                tooltip=[
-                    "date:T",
-                    "stress_score:Q",
-                    "mood:N",
-                    "sleep_quality:N",
-                    "energy:N",
-                    "workload:N",
-                ],
-            )
-            .properties(height=260)
-        )
-        st.altair_chart(daily_chart, use_container_width=True)
-
-    with col_weekly:
-        st.markdown("#### 📊 Weekly Average Stress")
-        weekly = (
-            df.groupby("week_start", as_index=False)["stress_score"]
-            .mean()
-            .rename(columns={"stress_score": "avg_stress"})
-        )
-        weekly_chart = (
-            alt.Chart(weekly)
-            .mark_bar()
-            .encode(
-                x="week_start:T",
-                y=alt.Y("avg_stress:Q", scale=alt.Scale(domain=[0, 100])),
-                tooltip=["week_start:T", "avg_stress:Q"],
-            )
-            .properties(height=260)
-        )
-          # 🤖 AI feedback on stress trends + confidence + stored feedback
-    st.markdown("### 🤖 Mentor’s View of Your Stress")
-
-    with st.spinner("Analyzing..."):
-        # uses your helper from the bottom of the file
-        stress_text, stress_conf, stress_conf_note = analyze_stress_trends_with_llm(
-            all_checkins
-        )
-
-    st.info(stress_text)
-    render_confidence(None, stress_conf, key="stress_dash_conf")
-    if stress_conf_note:
-        st.caption(f"Confidence note: {stress_conf_note}")
-
-    # simple feedback radio – and store the answer
-    stress_helpful = st.radio(
-        "Was this stress insight helpful?",
-        options=["Not sure yet", "Yes, helpful", "No, not really"],
-        index=0,
-        horizontal=True,
-        key="stress_insight_feedback",
-    )
-
-    # only store if user actually chooses yes/no
-    if stress_helpful != "Not sure yet":
-        save_insight_feedback(
-            kind="stress_trend",
-            date_str=str(max_date.date()),
-            helpful=stress_helpful,
-        )
 
 
-# ──────────────────────────────────────────────────────────────
-# 📝 Weekly Reflection Journal
-# ──────────────────────────────────────────────────────────────
-st.markdown("---")
-st.markdown("## 📝 Weekly Reflection Journal")
 
-st.caption(
-    "Once a week, jot down how your stress felt, what you accomplished, "
-    "and what was hard. The AI mentor will highlight patterns and growth over time."
-)
-
-JOURNAL_DIR = "data"
-os.makedirs(JOURNAL_DIR, exist_ok=True)
-JOURNAL_FILE = os.path.join(JOURNAL_DIR, "weekly_reflections.json")
-
-
-def _load_weekly_reflections() -> list:
-    if not os.path.exists(JOURNAL_FILE):
-        return []
-    try:
-        with open(JOURNAL_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception:
-        return []
-
-
-def _save_weekly_reflection(entry: dict) -> None:
-    entries = _load_weekly_reflections()
-    entries.append(entry)
-    with open(JOURNAL_FILE, "w", encoding="utf-8") as f:
-        json.dump(entries, f, indent=2, ensure_ascii=False)
-
-
-existing_entries = _load_weekly_reflections()
-week_ending = st.date_input(
-    "Week ending on",
-    value=datetime.today(),
-    help="Pick the week you are reflecting on (usually Friday or Sunday).",
-    key="weekly_ref_date",
-)
-
-reflection_text = st.text_area(
-    "Write about this week's stress patterns, accomplishments, and challenges:",
-    placeholder=(
-        "For example: This week I felt most stressed on Mon/Tue before stand-up. "
-        "Wins: shipped the API refactor, stayed consistent with 10-min breaks. "
-        "Challenges: skipped meditation on busy days."
-    ),
-    height=200,
-    key="weekly_reflection_text",
-)
-
-analyze_week = st.button("✨ Analyze and Save Weekly Reflection", key="analyze_week_btn")
-
-if analyze_week and reflection_text.strip():
-    user_payload = {
-        "current_week": {
-            "week_ending": week_ending.isoformat(),
-            "raw_text": reflection_text.strip(),
-        },
-        "recent_history": [
-            {
-                "week_ending": e.get("week_ending"),
-                "summary": e.get("ai_summary", ""),
-                "stress_pattern": e.get("stress_pattern", ""),
-            }
-            for e in existing_entries[-3:]
-        ],
-    }
-
-    with st.spinner("Reflecting on your week..."):
-        try:
-            resp = client.chat.completions.create(
-                model=MODEL,
-                messages=[
-                    {
-                        "role": "system",
-                        "content": (
-                            "You are a supportive corporate well-being coach. "
-                            "Given a weekly reflection, plus a few recent summaries, "
-                            "identify stress patterns, highlight accomplishments, "
-                            "name key challenges, and describe any growth you see. "
-                            "Then suggest 3–5 specific micro-actions for next week. "
-                            "Reply ONLY as JSON with keys: "
-                            "summary, stress_pattern, accomplishments, challenges, "
-                            "growth_highlights, action_suggestions (list of strings)."
-                        ),
-                    },
-                    {
-                        "role": "user",
-                        "content": json.dumps(user_payload, ensure_ascii=False, indent=2),
-                    },
-                ],
-                response_format={"type": "json_object"},
-                temperature=0.6,
-                max_tokens=700,
-            )
-            data = json.loads(resp.choices[0].message.content or "{}")
-        except Exception as e:
-            st.error(f"Could not analyze weekly reflection: {e}")
-        else:
-            entry = {
-                "week_ending": week_ending.isoformat(),
-                "raw_text": reflection_text.strip(),
-                "ai_summary": data.get("summary", ""),
-                "stress_pattern": data.get("stress_pattern", ""),
-                "accomplishments": data.get("accomplishments", ""),
-                "challenges": data.get("challenges", ""),
-                "growth_highlights": data.get("growth_highlights", ""),
-                "action_suggestions": data.get("action_suggestions", []),
-                "saved_at": datetime.now().isoformat(),
-            }
-            _save_weekly_reflection(entry)
-            st.success("✅ Weekly reflection saved and analyzed.")
-
-            st.markdown("### 🧠 AI Summary of Your Week")
-            if entry["ai_summary"]:
-                st.info(entry["ai_summary"])
-
-            cols = st.columns(2)
-            with cols[0]:
-                st.markdown("#### 🔍 Stress Pattern")
-                st.write(entry["stress_pattern"] or "No clear pattern extracted.")
-                st.markdown("#### 🌟 Accomplishments")
-                st.write(entry["accomplishments"] or "Write at least one win each week.")
-            with cols[1]:
-                st.markdown("#### ⚔️ Challenges")
-                st.write(entry["challenges"] or "Note what felt hardest this week.")
-                st.markdown("#### 🌱 Growth Highlights")
-                st.write(
-                    entry["growth_highlights"]
-                    or "Growth will show up after a few weeks of journaling."
-                )
-
-            if entry["action_suggestions"]:
-                st.markdown("#### 🎯 Suggestions for Next Week")
-                for s in entry["action_suggestions"]:
-                    st.write(f"- {s}")
-
-if existing_entries:
-    st.markdown("### 📚 Recent Weekly Entries")
-    for e in reversed(existing_entries[-4:]):
-        with st.expander(
-            f"Week ending {e.get('week_ending')} – click to view summary",
-            expanded=False,
-        ):
-            st.markdown("**Summary**")
-            st.write(e.get("ai_summary", ""))
-            st.markdown("**Stress pattern**")
-            st.write(e.get("stress_pattern", ""))
-            st.markdown("**Accomplishments**")
-            st.write(e.get("accomplishments", ""))
-            st.markdown("**Challenges**")
-            st.write(e.get("challenges", ""))
-            st.markdown("**Growth highlights**")
-            st.write(e.get("growth_highlights", ""))
-
-# ──────────────────────────────────────────────────────────────
-# 📉 Productivity vs. Stress Insights
-# ──────────────────────────────────────────────────────────────
-# -------------------------------------------------------------------
-# 📉 Productivity vs. Stress Insights (User Story)
-# -------------------------------------------------------------------
-st.markdown("---")
-st.markdown("## 📉 Productivity vs. Stress Insights")
-
-# ----- Capture productivity for a given day -----
-with st.form("productivity_form", clear_on_submit=False):
-    colp1, colp2 = st.columns(2)
-    with colp1:
-        prod_date = st.date_input("Date", value=datetime.today())
-    with colp2:
-        prod_score = st.slider(
-            "Productivity (0–10)",
-            min_value=0,
-            max_value=10,
-            value=7,
-            help="How productive did you feel overall on this day?",
-        )
-    prod_notes = st.text_input(
-        "Notes (optional)",
-        placeholder="e.g., Deep work in morning; many meetings; context switching, etc.",
-    )
-    prod_submitted = st.form_submit_button("Save today's productivity")
-
-if prod_submitted:
-    try:
-        save_productivity(prod_date.isoformat(), prod_score, prod_notes)
-        st.success("✅ Productivity entry saved.")
-    except Exception as e:
-        st.error(f"Could not save productivity entry: {e}")
-
-# ----- Build dataframes + join stress & productivity -----
-stress_df = build_stress_dataframe(
-    load_checkins() if callable(load_checkins) else []
-)
-prod_df = build_productivity_dataframe(
-    load_productivity() if callable(load_productivity) else []
-)
-joined_df = build_stress_productivity_join(stress_df, prod_df)
-
-if joined_df.empty:
-    st.info(
-        "To see productivity vs stress, log at least one Morning Check-In "
-        "and one productivity rating on the same date."
-    )
-else:
-    col_scatter, col_time = st.columns(2)
-
-    # Scatter plot: stress vs productivity
-    with col_scatter:
-        st.markdown("#### 🔍 Daily Stress vs. Productivity")
-        scatter = (
-            alt.Chart(joined_df)
-            .mark_circle(size=80)
-            .encode(
-                x=alt.X("stress_score:Q", title="Stress (0–100)"),
-                y=alt.Y("productivity:Q", title="Productivity (0–10)"),
-                color="date:T",
-                tooltip=[
-                    "date:T",
-                    "stress_score:Q",
-                    "productivity:Q",
-                    "mood:N",
-                    "sleep_quality:N",
-                    "energy:N",
-                    "workload:N",
-                    "prod_notes:N",
-                ],
-            )
-            .properties(height=260)
-        )
-        st.altair_chart(scatter, use_container_width=True)
-
-    # Trend line over time
-    with col_time:
-        st.markdown("#### 📆 Stress & Productivity Over Time")
-        long_df = pd.melt(
-            joined_df[["date", "stress_score", "productivity"]],
-            id_vars="date",
-            value_vars=["stress_score", "productivity"],
-            var_name="metric",
-            value_name="value",
-        )
-        trend = (
-            alt.Chart(long_df)
-            .mark_line(point=True)
-            .encode(
-                x="date:T",
-                y="value:Q",
-                color="metric:N",
-                tooltip=["date:T", "metric:N", "value:Q"],
-            )
-            .properties(height=260)
-        )
-        st.altair_chart(trend, use_container_width=True)
-
-    # 🤖 AI feedback + confidence + user feedback
-    st.markdown("### 🤖 Mentor’s Insight on Stress vs. Productivity")
-
-    joined_records = joined_df.to_dict(orient="records")
-    with st.spinner("Analyzing how stress is affecting your productivity..."):
-        prod_text, prod_conf, prod_conf_note = analyze_productivity_vs_stress_with_llm(
-            joined_records
-        )
-
-    st.info(prod_text)
-    render_confidence(None, prod_conf, key="prod_vs_stress_conf")
-    if prod_conf_note:
-        st.caption(f"Confidence note: {prod_conf_note}")
-
-    prod_helpful = st.radio(
-        "Was this productivity insight helpful?",
-        options=["Not sure yet", "Yes, helpful", "No, not really"],
-        index=0,
-        horizontal=True,
-        key="prod_insight_feedback",
-    )
-
-    if prod_helpful != "Not sure yet":
-        # use the most recent date present in the joined data
-        latest_date = joined_df["date"].max()
-        save_insight_feedback(
-            kind="prod_vs_stress",
-            date_str=str(latest_date.date()),
-            helpful=prod_helpful,
-        )
 
 # ──────────────────────────────────────────────────────────────
 # 🌬 Guided Meditations & Breathing Exercises
@@ -1530,50 +1227,376 @@ else:
                     "Try again or check your API key."
                 )
 
+
+
+# ──────────────────────────────────────────────────────────────
+
+
+
+# ──────────────────────────────────────────────────────────────
+# 📝 Weekly Reflection Journal
+# ──────────────────────────────────────────────────────────────
+st.markdown("---")
+st.markdown("## 📝 Weekly Reflection Journal")
+
+st.caption(
+    "Once a week, jot down how your stress felt, what you accomplished, "
+    "and what was hard. The AI mentor will highlight patterns and growth over time."
+)
+
+JOURNAL_DIR = "data"
+os.makedirs(JOURNAL_DIR, exist_ok=True)
+JOURNAL_FILE = os.path.join(JOURNAL_DIR, "weekly_reflections.json")
+
+
+def _load_weekly_reflections() -> list:
+    if not os.path.exists(JOURNAL_FILE):
+        return []
+    try:
+        with open(JOURNAL_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return []
+
+
+def _save_weekly_reflection(entry: dict) -> None:
+    entries = _load_weekly_reflections()
+    entries.append(entry)
+    with open(JOURNAL_FILE, "w", encoding="utf-8") as f:
+        json.dump(entries, f, indent=2, ensure_ascii=False)
+
+
+existing_entries = _load_weekly_reflections()
+week_ending = st.date_input(
+    "Week ending on",
+    value=datetime.today(),
+    help="Pick the week you are reflecting on (usually Friday or Sunday).",
+    key="weekly_ref_date",
+)
+
+reflection_text = st.text_area(
+    "Write about this week's stress patterns, accomplishments, and challenges:",
+    placeholder=(
+        "For example: This week I felt most stressed on Mon/Tue before stand-up. "
+        "Wins: shipped the API refactor, stayed consistent with 10-min breaks. "
+        "Challenges: skipped meditation on busy days."
+    ),
+    height=200,
+    key="weekly_reflection_text",
+)
+
+
+def _normalize_text_block(value):
+    """
+    Normalize LLM outputs (list/dict/string) into clean text.
+    - list -> bullet list
+    - dict -> key: value lines
+    - other -> string
+    """
+    if value is None:
+        return ""
+
+    if isinstance(value, list):
+        items = [str(x).strip() for x in value if str(x).strip()]
+        if not items:
+            return ""
+        return "\n".join(f"- {item}" for item in items)
+
+    if isinstance(value, dict):
+        pairs = [f"{k}: {v}" for k, v in value.items() if v]
+        return "\n".join(pairs)
+
+    return str(value).strip()
+
+
+
+analyze_week = st.button("✨ Analyze and Save Weekly Reflection", key="analyze_week_btn")
+
+if analyze_week and reflection_text.strip():
+    user_payload = {
+        "current_week": {
+            "week_ending": week_ending.isoformat(),
+            "raw_text": reflection_text.strip(),
+        },
+        "recent_history": [
+            {
+                "week_ending": e.get("week_ending"),
+                "summary": e.get("ai_summary", ""),
+                "stress_pattern": e.get("stress_pattern", ""),
+            }
+            for e in existing_entries[-3:]
+        ],
+    }
+
+    with st.spinner("Reflecting on your week..."):
+        try:
+            resp = client.chat.completions.create(
+                model=MODEL,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            "You are a supportive corporate well-being coach. "
+                            "Given a weekly reflection, plus a few recent summaries, "
+                            "identify stress patterns, highlight accomplishments, "
+                            "name key challenges, and describe any growth you see. "
+                            "Then suggest 3–5 specific micro-actions for next week. "
+                            "Reply ONLY as JSON with keys: "
+                            "summary, stress_pattern, accomplishments, challenges, "
+                            "growth_highlights, action_suggestions (list of strings)."
+                        ),
+                    },
+                    {
+                        "role": "user",
+                        "content": json.dumps(user_payload, ensure_ascii=False, indent=2),
+                    },
+                ],
+                response_format={"type": "json_object"},
+                temperature=0.6,
+                max_tokens=700,
+            )
+            data = json.loads(resp.choices[0].message.content or "{}")
+        except Exception as e:
+            st.error(f"Could not analyze weekly reflection: {e}")
+        else:
+            entry = {
+                "week_ending": week_ending.isoformat(),
+                "raw_text": reflection_text.strip(),
+                "ai_summary": _normalize_text_block(data.get("summary")),
+                "stress_pattern":  _normalize_text_block(data.get("stress_pattern")),
+                "accomplishments": _normalize_text_block(data.get("accomplishments")),
+                "challenges":  _normalize_text_block(data.get("challenges")),
+                "growth_highlights": _normalize_text_block(data.get("growth_highlights")),
+                "action_suggestions": data.get("action_suggestions", []),
+                "saved_at": datetime.now().isoformat(),
+            }
+            _save_weekly_reflection(entry)
+            st.success("✅ Weekly reflection saved and analyzed.")
+
+            st.markdown("### 🧠 AI Summary of Your Week")
+            if entry["ai_summary"]:
+                st.info(entry["ai_summary"])
+
+            cols = st.columns(2)
+            with cols[0]:
+                st.markdown("#### 🔍 Stress Pattern")
+                st.write(entry["stress_pattern"] or "No clear pattern extracted.")
+                st.markdown("#### 🌟 Accomplishments")
+                st.write(entry["accomplishments"] or "Write at least one win each week.")
+            with cols[1]:
+                st.markdown("#### ⚔️ Challenges")
+                st.write(entry["challenges"] or "Note what felt hardest this week.")
+                st.markdown("#### 🌱 Growth Highlights")
+                st.write(
+                    entry["growth_highlights"]
+                    or "Growth will show up after a few weeks of journaling."
+                )
+
+            if entry["action_suggestions"]:
+                st.markdown("#### 🎯 Suggestions for Next Week")
+                for s in entry["action_suggestions"]:
+                    st.write(f"- {s}")
+
+if existing_entries:
+    st.markdown("### 📚 Recent Weekly Entries")
+    for e in reversed(existing_entries[-4:]):
+        with st.expander(
+            f"Week ending {e.get('week_ending')} – click to view summary",
+            expanded=False,
+        ):
+            st.markdown("**Summary**")
+            st.write(e.get("ai_summary", ""))
+            st.markdown("**Stress pattern**")
+            st.write(e.get("stress_pattern", ""))
+            st.markdown("**Accomplishments**")
+            st.write(e.get("accomplishments", ""))
+            st.markdown("**Challenges**")
+            st.write(e.get("challenges", ""))
+            st.markdown("**Growth highlights**")
+            st.write(e.get("growth_highlights", ""))
+
+
 # ──────────────────────────────────────────────────────────────
 # 💬 AI Coaching & Support — Mentor Conversations
 # ──────────────────────────────────────────────────────────────
 st.markdown("---")
 st.markdown("## 💬 AI Coaching & Support — Mentor Conversations")
 
+# Keep mentor conversation history in session_state
 if "mentor_history" not in st.session_state:
     st.session_state["mentor_history"] = []
 
-# Show previous conversation
-for h in st.session_state["mentor_history"]:
-    st.chat_message("user").markdown(h["user"])
-    st.chat_message("assistant").markdown(h["assistant"])
+# 1) Show previous conversation from history
+for idx, h in enumerate(st.session_state["mentor_history"]):
+    st.chat_message("user").markdown(h.get("user", ""))
+    st.chat_message("assistant").markdown(h.get("assistant", ""))
 
-user_msg = st.text_input("Tell me what's stressing you out today...")
-if user_msg:
-    st.chat_message("user").markdown(user_msg)
+    # show confidence per turn if present
+    if "confidence" in h:
+        render_confidence(
+            provenance=None,
+            confidence=h.get("confidence"),
+            key=f"mentor_conf_{idx}",
+        )
+        if h.get("confidence_note"):
+            st.caption(h["confidence_note"])
 
+# 2) Input form directly under the heading
+with st.form("mentor_form", clear_on_submit=True):
+    user_msg = st.text_area(
+        "Tell me what's stressing you out today...",
+        key="mentor_input",
+        placeholder="Type a short message about what's on your mind…",
+    )
+    send_clicked = st.form_submit_button("Send")
+
+# 3) Only send to the mentor when the user clicks Send
+if send_clicked and user_msg.strip():
+    msg_text = user_msg.strip()
     try:
         from services.mentor_graph import run_mentor_conversation
 
         reply = run_mentor_conversation(
-            user_message=user_msg,
+            user_message=msg_text,
             history=st.session_state["mentor_history"],
         )
     except Exception as e:
         reply = {
-            "user": user_msg,
+            "user": msg_text,
             "assistant": f"⚠️ Mentor error: {e}",
+            "confidence": None,
+            "confidence_note": None,
         }
 
-    # Show mentor response
-    st.chat_message("assistant").markdown(reply["assistant"])
+    # Normalise to a dict
+    if not isinstance(reply, dict):
+        reply = {
+            "user": msg_text,
+            "assistant": str(reply),
+            "confidence": None,
+            "confidence_note": None,
+        }
 
-    # ⭐ AI Confidence Display (must stay inside this block)
-    if isinstance(reply, dict):       # <---- THIS MUST BE HERE
-        render_confidence(
-            provenance=None,
-            confidence=reply.get("confidence"),
-            key=f"mentor_conf_{len(st.session_state['mentor_history'])}",
-        )
-        if reply.get("confidence_note"):
-            st.caption(reply["confidence_note"])
-
-    # Save message pair
+    # Append the full turn to history and rerun so it shows once
     st.session_state["mentor_history"].append(reply)
+    st.rerun()
 
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# ⭐ Motivational Messaging (Standalone Section at the End)
+# ──────────────────────────────────────────────────────────────────────────────
+
+st.markdown("---")
+st.markdown("## ⭐ Motivational Messaging")
+
+task_completion = st.session_state.get("task_completion", {})
+total = len(task_completion)
+done = sum(1 for v in task_completion.values() if v)
+
+if total == 0 or done == 0:
+    st.info("Complete some daily practices to receive a tailored motivational message.")
+else:
+    completed_tasks = [task for task, finished in task_completion.items() if finished]
+
+    # 🔘 Only generate when the user asks
+    if st.button("✨ Generate motivational message"):
+        try:
+            msg = run_motivation_message(
+                completed=done,
+                total=total,
+                activities=completed_tasks,
+            )
+        except Exception as e:
+            msg = (
+                "You're making meaningful progress. Even one completed practice is a real step "
+                f"toward lower stress. (AI motivation unavailable: {e})"
+            )
+
+        st.success(msg)
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 🧑‍💼 HR Wellness Insights (Anonymized Stress Trends)
+# ──────────────────────────────────────────────────────────────────────────────
+
+st.markdown("---")
+st.markdown("## 🧑‍💼 HR Wellness Insights (Anonymized)")
+
+all_checkins = load_checkins() if callable(load_checkins) else []
+
+if not all_checkins:
+    st.info("No check-in data available yet to generate HR insights.")
+else:
+    # 🔘 Only show charts + LLM summary when HR clicks the button
+    if st.button("📊 Generate HR wellness insights"):
+        df = build_stress_dataframe(all_checkins)
+
+        # Weekly averages (same as personal dashboard)
+        weekly = (
+            df.groupby("week_start", as_index=False)["stress_score"]
+            .mean()
+            .rename(columns={"stress_score": "avg_stress"})
+        )
+
+        st.markdown("### 📊 Weekly Employee Stress Overview")
+
+        weekly_chart = (
+            alt.Chart(weekly)
+            .mark_bar()
+            .encode(
+                x=alt.X("week_start:T", title="Week"),
+                y=alt.Y("avg_stress:Q", title="Average Stress (0–100)"),
+                tooltip=["week_start:T", "avg_stress:Q"],
+            )
+            .properties(height=240)
+        )
+        # Streamlit: replace use_container_width with width="stretch"
+        st.altair_chart(weekly_chart, width="stretch")
+
+        # Stress distribution
+        st.markdown("### 📈 Stress Level Distribution in the Workforce")
+
+        df_copy = df.copy()
+        df_copy["band"] = pd.cut(
+            df_copy["stress_score"],
+            bins=[0, 33, 66, 100],
+            labels=["Low", "Medium", "High"],
+            include_lowest=True,
+        )
+
+        band_counts = (
+            df_copy.groupby("band", as_index=False)["stress_score"]
+            .count()
+            .rename(columns={"stress_score": "count"})
+        )
+
+        dist_chart = (
+            alt.Chart(band_counts)
+            .mark_bar()
+            .encode(
+                x=alt.X("band:N", title="Stress Category"),
+                y=alt.Y("count:Q", title="Number of Check-ins"),
+                tooltip=["band:N", "count:Q"],
+            )
+            .properties(height=240)
+        )
+
+        st.altair_chart(dist_chart, width="stretch")
+
+        # AI-generated HR summary (via LangGraph)
+        st.markdown("### 🤖 AI Insight for HR Leaders")
+
+        stress_series = [
+            {
+                "date": str(row["date"]),
+                "stress_score": float(row["stress_score"]),
+            }
+            for _, row in df.iterrows()
+        ]
+
+        try:
+            hr_summary = run_hr_insights(stress_series)
+        except Exception as e:
+            hr_summary = f"Could not generate HR summary: {e}"
+
+        st.info(hr_summary)

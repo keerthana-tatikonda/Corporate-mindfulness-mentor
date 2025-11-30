@@ -28,6 +28,12 @@ from services.llm import client, MODEL
 from pydantic import ValidationError
 import logging
 
+CHECKIN_SYS_PROMPT = (
+    "You are a wellness check-in coach. Provide a micro-plan based on mood, "
+    "sleep quality, energy level, and workload. Output JSON with 'plan' and "
+    "'summary'. Keep activities short, safe, and workplace friendly."
+)
+
 log = logging.getLogger(__name__)
 
 def _clip01(x) -> float:
@@ -1334,6 +1340,33 @@ def adapt_plan_node(state: Dict[str, Any]) -> Dict[str, Any]:
         "adapted_confidence_note": note,
     }
 
+def _rule_based_fallback(checkin):
+    mood = (checkin.mood or "").lower()
+    energy = (checkin.energy or "").lower()
+    workload = (checkin.workload or "").lower()
+
+    items = []
+
+    if workload == "heavy":
+        items.append("Take a 3–5 min breathing reset before meetings.")
+        items.append("Do a 2-min posture reset & soft-gaze break.")
+    else:
+        items.append("Take a short 5-min mindful walk.")
+        items.append("Do a 3-min grounding scan.")
+
+    if mood in ("sad", "frustrated", "tired"):
+        items.append("Write one quick reflection: what’s one thing going right today?")
+
+    summary = (
+        f"Based on mood='{checkin.mood}', energy='{checkin.energy}', "
+        f"and workload='{checkin.workload}', this plan provides quick "
+        f"regulation activities designed to stabilize emotional state "
+        f"and ease into the workday."
+    )
+
+    return items, summary
+
+
 
 def morning_checkin_node(state: Dict[str, Any]) -> Dict[str, Any]:
     ck = state.get("checkin")
@@ -1342,19 +1375,29 @@ def morning_checkin_node(state: Dict[str, Any]) -> Dict[str, Any]:
 
     # If API key is missing, return personalized rule-based fallback
     if not os.environ.get("OPENAI_API_KEY"):
-        data = _rule_based_fallback(ck)
+        data = _rule_based_fallback(ck)  # <- returns dict
         safe_payload = {
-            "summary": (str(data.get("summary")).strip() if data.get("summary") is not None else None),
-            "focus_for_today": _to_list_checkin(data.get("focus_for_today")),
-            "risk_flags": _to_list_checkin(data.get("risk_flags")),
+            "summary": (
+                str(data.get("summary")).strip()
+                if data.get("summary") is not None
+                else None
+            ),
+            "focus_for_today": _to_list(data.get("focus_for_today")),
+            "risk_flags": _to_list(data.get("risk_flags")),
         }
         try:
             state["day_adjustment"] = DayAdjustment(**safe_payload).model_dump()
         except ValidationError as ve:
-            log.error("DayAdjustment validation failed (no API key): %s | payload=%r", ve, safe_payload)
+            log.error(
+                "DayAdjustment validation failed (no API key): %s | payload=%r",
+                ve,
+                safe_payload,
+            )
             state["day_adjustment"] = DayAdjustment(
-                summary=safe_payload.get("summary") or "Plan adjusted for today.",
-                focus_for_today=safe_payload.get("focus_for_today") or ["1-min mindful breath before each meeting"],
+                summary=safe_payload.get("summary")
+                or "Plan adjusted for today.",
+                focus_for_today=safe_payload.get("focus_for_today")
+                or ["1-min mindful breath before each meeting"],
                 risk_flags=safe_payload.get("risk_flags") or [],
             ).model_dump()
         return state
@@ -1378,12 +1421,16 @@ def morning_checkin_node(state: Dict[str, Any]) -> Dict[str, Any]:
             ],
             response_format={"type": "json_object"},
         )
-        data = json.loads(resp.choices[0].message.content)
+        data = json.loads(resp.choices[0].message.content or "{}")
 
         # Validate the JSON-mode payload; if invalid/empty, force fallback to free-form
-        focus_list = _to_list_checkin(data.get("focus_for_today"))
-        risk_list = _to_list_checkin(data.get("risk_flags"))
-        summary_txt = (str(data.get("summary")).strip() if data.get("summary") is not None else "")
+        focus_list = _to_list(data.get("focus_for_today"))
+        risk_list = _to_list(data.get("risk_flags"))
+        summary_txt = (
+            str(data.get("summary")).strip()
+            if data.get("summary") is not None
+            else ""
+        )
 
         if not focus_list:  # key requirement for your UI/tests
             raise ValueError("JSON-mode payload missing non-empty 'focus_for_today'")
@@ -1397,10 +1444,16 @@ def morning_checkin_node(state: Dict[str, Any]) -> Dict[str, Any]:
         try:
             state["day_adjustment"] = DayAdjustment(**safe_payload).model_dump()
         except ValidationError as ve:
-            log.error("DayAdjustment validation failed (json mode): %s | payload=%r", ve, safe_payload)
+            log.error(
+                "DayAdjustment validation failed (json mode): %s | payload=%r",
+                ve,
+                safe_payload,
+            )
             state["day_adjustment"] = DayAdjustment(
-                summary=safe_payload.get("summary") or "Plan adjusted for today.",
-                focus_for_today=safe_payload.get("focus_for_today") or ["1-min mindful breath before each meeting"],
+                summary=safe_payload.get("summary")
+                or "Plan adjusted for today.",
+                focus_for_today=safe_payload.get("focus_for_today")
+                or ["1-min mindful breath before each meeting"],
                 risk_flags=safe_payload.get("risk_flags") or [],
             ).model_dump()
         return state
@@ -1423,22 +1476,32 @@ def morning_checkin_node(state: Dict[str, Any]) -> Dict[str, Any]:
             start = content.find("{")
             end = content.rfind("}")
             if start != -1 and end != -1 and end > start:
-                content = content[start:end+1]
+                content = content[start : end + 1]
 
-        data = json.loads(content)
+        data = json.loads(content or "{}")
         safe_payload = {
-            "summary": (str(data.get("summary")).strip() if data.get("summary") is not None else None),
-            "focus_for_today": _to_list_checkin(data.get("focus_for_today")),
-            "risk_flags": _to_list_checkin(data.get("risk_flags")),
+            "summary": (
+                str(data.get("summary")).strip()
+                if data.get("summary") is not None
+                else None
+            ),
+            "focus_for_today": _to_list(data.get("focus_for_today")),
+            "risk_flags": _to_list(data.get("risk_flags")),
         }
 
         try:
             state["day_adjustment"] = DayAdjustment(**safe_payload).model_dump()
         except ValidationError as ve:
-            log.error("DayAdjustment validation failed (free-form): %s | payload=%r", ve, safe_payload)
+            log.error(
+                "DayAdjustment validation failed (free-form): %s | payload=%r",
+                ve,
+                safe_payload,
+            )
             state["day_adjustment"] = DayAdjustment(
-                summary=safe_payload.get("summary") or "Plan adjusted for today.",
-                focus_for_today=safe_payload.get("focus_for_today") or ["1-min mindful breath before each meeting"],
+                summary=safe_payload.get("summary")
+                or "Plan adjusted for today.",
+                focus_for_today=safe_payload.get("focus_for_today")
+                or ["1-min mindful breath before each meeting"],
                 risk_flags=safe_payload.get("risk_flags") or [],
             ).model_dump()
         return state
@@ -1449,8 +1512,124 @@ def morning_checkin_node(state: Dict[str, Any]) -> Dict[str, Any]:
     # Final safety net: deterministic rule-based plan
     data = _rule_based_fallback(ck)
     state["day_adjustment"] = DayAdjustment(
-        summary=(str(data.get("summary")).strip() if data.get("summary") is not None else "Plan adjusted for today."),
-        focus_for_today=_to_list(data.get("focus_for_today")) or ["1-min mindful breath before each meeting"],
+        summary=(
+            str(data.get("summary")).strip()
+            if data.get("summary") is not None
+            else "Plan adjusted for today."
+        ),
+        focus_for_today=_to_list(data.get("focus_for_today"))
+        or ["1-min mindful breath before each meeting"],
         risk_flags=_to_list(data.get("risk_flags")),
     ).model_dump()
     return state
+
+
+def motivational_message_node(state: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    State:
+      - completed: int
+      - total: int
+      - activities: List[str]   (typically the ones the user completed)
+    Output:
+      - message: str  (an encouraging, tailored message)
+    """
+    completed = int(state.get("completed", 0) or 0)
+    total = int(state.get("total", 0) or 0)
+    activities: List[str] = state.get("activities") or []
+
+    if total <= 0 or completed <= 0:
+        state["message"] = (
+            "Once you start completing a few practices, "
+            "I’ll send you personalized encouragement."
+        )
+        return state
+
+    # Build a simple summary for the LLM
+    ratio = completed / max(total, 1)
+    user_payload = {
+        "completed": completed,
+        "total": total,
+        "completion_ratio": round(ratio, 2),
+        "completed_activities": activities[:10],  # keep prompt compact
+    }
+
+    system = (
+        "You are a warm, concise corporate mindfulness coach. "
+        "The user has completed some daily mindfulness practices. "
+        "Write ONE short, encouraging message (2–3 sentences max) "
+        "that reinforces consistency and self-compassion. "
+        "Avoid giving new instructions; just celebrate and motivate."
+    )
+
+    try:
+        resp = client.chat.completions.create(
+            model=MODEL,
+            messages=[
+                {"role": "system", "content": system},
+                {
+                    "role": "user",
+                    "content": json.dumps(user_payload, ensure_ascii=False, indent=2),
+                },
+            ],
+            temperature=0.7,
+            max_tokens=160,
+        )
+        text = (resp.choices[0].message.content or "").strip()
+    except Exception as e:
+        text = (
+            f"You're making progress — even a single completed practice "
+            f"helps build a healthier routine. (Could not fetch AI message: {e})"
+        )
+
+    state["message"] = text
+    return state
+
+def hr_insights_node(state: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    State:
+      - stress_series: List[Dict[str, Any]] with entries like:
+          { "date": "2025-11-30", "stress_score": 72.0 }
+    Output:
+      - summary: str  (HR-facing anonymized insight)
+    """
+    series: List[Dict[str, Any]] = state.get("stress_series") or []
+
+    if not series:
+        state["summary"] = "No aggregated stress data is available yet for HR insights."
+        return state
+
+    # Keep the payload compact (e.g., last 90 days max)
+    series = series[-90:]
+
+    system = (
+        "You are an HR analytics assistant. You receive anonymized time-series data "
+        "about employee stress (no names, no notes). "
+        "1) Summarize overall trends (improving, worsening, stable). "
+        "2) Highlight any notable patterns (e.g., spikes on certain weeks). "
+        "3) Suggest 2–4 concrete, workplace-wide interventions "
+        "(meeting culture, quiet hours, manager check-ins, etc.). "
+        "Speak only about 'employees' or 'the team', never individuals. "
+        "Keep the answer under 200 words."
+    )
+
+    try:
+        resp = client.chat.completions.create(
+            model=MODEL,
+            messages=[
+                {"role": "system", "content": system},
+                {
+                    "role": "user",
+                    "content": json.dumps({"stress_series": series}, ensure_ascii=False, indent=2),
+                },
+            ],
+            temperature=0.5,
+            max_tokens=400,
+        )
+        summary = (resp.choices[0].message.content or "").strip()
+    except Exception as e:
+        summary = f"Could not generate HR insights at this time: {e}"
+
+    state["summary"] = summary
+    return state
+
+

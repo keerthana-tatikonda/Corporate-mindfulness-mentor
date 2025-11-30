@@ -23,6 +23,7 @@ from .nodes import (
     personalize_plan_node,
     adapt_plan_node,
     morning_checkin_node,
+    motivational_message_node, hr_insights_node,
 )
 
 # ---------------------------------------------------------------------
@@ -239,109 +240,62 @@ def run_morning_checkin(checkin: CheckIn) -> DayAdjustment:
     return DayAdjustment(**da)
 
 
-# ---------------------------------------------------------------------
-# 📊 Stress Analytics (trend explanation)
-# ---------------------------------------------------------------------
 
 
-def _format_stress_history(checkins: List[Dict[str, Any]]) -> str:
+class MotivationState(TypedDict, total=False):
+    completed: int
+    total: int
+    activities: List[str]
+    message: str
+
+
+def create_motivation_graph():
+    g = StateGraph(MotivationState)
+    g.add_node("motivate", motivational_message_node)
+    g.set_entry_point("motivate")
+    g.add_edge("motivate", END)
+    return g.compile()
+
+
+def run_motivation_message(
+    completed: int,
+    total: int,
+    activities: List[str],
+) -> str:
     """
-    Convert raw check-in dicts (from checkin_storage) into a compact text
-    summary for the model.
+    LangGraph entrypoint for Motivational Messaging user story.
     """
-    lines = []
-    for idx, item in enumerate(checkins, start=1):
-        c = (item or {}).get("checkin") or item  # allow both shapes
-        mood = c.get("mood", "unknown")
-        sleep = c.get("sleep_quality", "unknown")
-        energy = c.get("energy", "unknown")
-        workload = c.get("workload", "unknown")
-        notes = c.get("notes", "")
-        lines.append(
-            f"Day {idx}: mood={mood}, sleep={sleep}, energy={energy}, "
-            f"workload={workload}, notes={notes}"
-        )
-    return "\n".join(lines)
+    compiled = create_motivation_graph()
+    out = compiled.invoke({
+        "completed": completed,
+        "total": total,
+        "activities": activities,
+        "message": "",
+    })
+    return out.get("message", "")
+
+class HRInsightsState(TypedDict, total=False):
+    stress_series: List[Dict[str, Any]]
+    summary: str
 
 
-def run_stress_analytics(all_checkins: List[Dict[str, Any]]) -> str:
+def create_hr_insights_graph():
+    g = StateGraph(HRInsightsState)
+    g.add_node("hr_insights", hr_insights_node)
+    g.set_entry_point("hr_insights")
+    g.add_edge("hr_insights", END)
+    return g.compile()
+
+
+def run_hr_insights(stress_series: List[Dict[str, Any]]) -> str:
     """
-    Given the full list from load_checkins(), ask the LLM to analyze
-    stress trends and return a friendly explanation string.
-    (Used by the Stress-Level Tracking Dashboard.)
+    LangGraph entrypoint for HR Wellness Insights user story.
     """
-    if not all_checkins:
-        return (
-            "You don't have any check-ins yet. Once you log a few days, "
-            "I'll summarize your stress trends."
-        )
-
-    history_text = _format_stress_history(all_checkins)
-
-    system_msg = (
-        "You are an expert stress-management coach. "
-        "Analyze the user's stress history over multiple days. "
-        "Identify trends, high-risk patterns, and give 3–5 concrete suggestions. "
-        "Keep it under 200 words, friendly and practical."
-    )
-    user_msg = f"Here is the recent stress history:\n{history_text}"
-
-    resp = client.responses.create(
-        model=MODEL,
-        input=[
-            {"role": "system", "content": system_msg},
-            {"role": "user", "content": user_msg},
-        ],
-    )
-    return resp.output[0].content[0].text.strip()
+    compiled = create_hr_insights_graph()
+    out = compiled.invoke({
+        "stress_series": stress_series,
+        "summary": "",
+    })
+    return out.get("summary", "")
 
 
-# ---------------------------------------------------------------------
-# 📉 Productivity vs Stress Insights
-# ---------------------------------------------------------------------
-
-
-def run_productivity_insights(joined_records: List[Dict[str, Any]]) -> str:
-    """
-    joined_records is the list of dicts from your joined_df in app.py,
-    one item per day having both stress_score and productivity.
-    Returns a short explanation of how stress and productivity relate.
-    """
-    if not joined_records:
-        return (
-            "I don't yet have any days where both stress and productivity "
-            "were logged. Once you record both for the same day, I'll help "
-            "you understand how they relate."
-        )
-
-    # Build a compact table for the model
-    rows = []
-    for i, row in enumerate(joined_records, start=1):
-        date = row.get("date")
-        stress = row.get("stress_score")
-        prod = row.get("productivity")
-        mood = row.get("mood", "")
-        workload = row.get("workload", "")
-        notes = row.get("prod_notes", "")
-        rows.append(
-            f"Day {i} ({date}): stress={stress}, productivity={prod}, "
-            f"mood={mood}, workload={workload}, notes={notes}"
-        )
-    history = "\n".join(rows)
-
-    system_msg = (
-        "You are a performance coach. Analyze how stress relates to "
-        "productivity based on the daily records. "
-        "Look for thresholds where productivity drops as stress rises, "
-        "and give 3–5 specific recommendations for balancing both."
-    )
-    user_msg = f"Here is the combined stress/productivity history:\n{history}"
-
-    resp = client.responses.create(
-        model=MODEL,
-        input=[
-            {"role": "system", "content": system_msg},
-            {"role": "user", "content": user_msg},
-        ],
-    )
-    return resp.output[0].content[0].text.strip()
