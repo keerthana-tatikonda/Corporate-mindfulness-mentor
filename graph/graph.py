@@ -373,6 +373,8 @@ class MotivationState(TypedDict, total=False):
     total: int
     activities: List[str]
     message: str
+    confidence: Optional[float]
+    confidence_note: Optional[str]
 
 
 def create_motivation_graph():
@@ -387,9 +389,10 @@ def run_motivation_message(
     completed: int,
     total: int,
     activities: List[str],
-) -> str:
+) -> dict:
     """
     LangGraph entrypoint for Motivational Messaging user story.
+    Returns dict with message, confidence, and confidence_note.
     """
     compiled = create_motivation_graph()
     out = compiled.invoke({
@@ -397,12 +400,20 @@ def run_motivation_message(
         "total": total,
         "activities": activities,
         "message": "",
+        "confidence": None,
+        "confidence_note": None,
     })
-    return out.get("message", "")
+    return {
+        "message": out.get("message", ""),
+        "confidence": out.get("confidence"),
+        "confidence_note": out.get("confidence_note", ""),
+    }
 
 class HRInsightsState(TypedDict, total=False):
     stress_series: List[Dict[str, Any]]
     summary: str
+    confidence: Optional[float]
+    confidence_note: Optional[str]
 
 
 def create_hr_insights_graph():
@@ -413,15 +424,22 @@ def create_hr_insights_graph():
     return g.compile()
 
 
-def run_hr_insights(stress_series: List[Dict[str, Any]]) -> str:
+def run_hr_insights(stress_series: List[Dict[str, Any]]) -> dict:
     """
     LangGraph entrypoint for HR Wellness Insights user story.
+    Returns dict with summary, confidence, and confidence_note.
     """
     compiled = create_hr_insights_graph()
     out = compiled.invoke({
         "stress_series": stress_series,
         "summary": "",
+        "confidence": None,
+        "confidence_note": None,
     })
-    return out.get("summary", "")
+    return {
+        "summary": out.get("summary", ""),
+        "confidence": out.get("confidence"),
+        "confidence_note": out.get("confidence_note", ""),
+    }
 
 

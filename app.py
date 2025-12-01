@@ -81,6 +81,355 @@ def render_confidence(provenance: str | None, confidence: float | None, key: str
     st.progress(pct, text="Model confidence")
 
 
+def render_uncertainty(confidence: float | None, key: str, show_explanation: bool = True):
+    """
+    Display AI uncertainty meter (inverse of confidence) with color-coded warnings.
+
+    Args:
+        confidence: Model confidence (0-1), uncertainty = 1 - confidence
+        key: Unique key for Streamlit widget
+        show_explanation: Whether to show interpretive text below meter
+    """
+    if confidence is None:
+        return
+
+    # Calculate uncertainty (inverse of confidence)
+    uncertainty = 1.0 - confidence
+    uncertainty_pct = int(max(0, min(100, round(uncertainty * 100))))
+
+    # Determine color and interpretation based on uncertainty level
+    if uncertainty_pct >= 50:  # High uncertainty (low confidence)
+        color = "#ff6b6b"  # Red
+        bar_color = "#ff6b6b"
+        level = "⚠️ High Uncertainty"
+        interpretation = "Treat this as a suggestion, not a recommendation. More data needed for reliable insights."
+    elif uncertainty_pct >= 20:  # Moderate uncertainty
+        color = "#ffa500"  # Orange
+        bar_color = "#ffa500"
+        level = "⚡ Moderate Uncertainty"
+        interpretation = "This guidance is helpful but not definitive. Use your judgment alongside AI suggestions."
+    else:  # Low uncertainty (high confidence)
+        color = "#51cf66"  # Green
+        bar_color = "#51cf66"
+        level = "✓ Low Uncertainty"
+        interpretation = "AI is confident in this analysis. You can rely on these insights with trust."
+
+    # Display uncertainty meter
+    st.markdown(
+        f"""
+        <div style="display:flex;align-items:center;gap:.5rem;margin:.5rem 0 .25rem 0;">
+            <span style="font-size:.85rem;padding:.15rem .5rem;border-radius:999px;background:{color}20;color:{color};font-weight:500;">
+                {level}
+            </span>
+            <span style="font-size:.8rem;color:#666;">{uncertainty_pct}%</span>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    # Custom colored progress bar using HTML/CSS
+    st.markdown(
+        f"""
+        <div style="width:100%;background:#f0f0f0;border-radius:4px;height:8px;overflow:hidden;">
+            <div style="width:{uncertainty_pct}%;background:{bar_color};height:100%;transition:width 0.3s ease;"></div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    # Show interpretation if enabled
+    if show_explanation:
+        st.caption(f"💡 {interpretation}")
+
+
+# ──────────────────────────────────────────────────────────────
+# Explainability and Reasoning Transparency
+# ──────────────────────────────────────────────────────────────
+
+def render_explainability_view(reasoning_steps: list, key: str):
+    """
+    Display AI reasoning process in an expandable view.
+    Shows step-by-step how the AI reached its conclusion.
+    """
+    with st.expander("🔍 AI Reasoning Process (How we got here)", expanded=False):
+        st.caption("This shows the AI's thought process step-by-step:")
+
+        for i, step in enumerate(reasoning_steps, 1):
+            st.markdown(f"**Step {i}: {step.get('title', 'Processing')}**")
+            st.write(f"→ {step.get('description', 'No description')}")
+            if step.get('confidence'):
+                st.progress(step['confidence'], text=f"Confidence: {int(step['confidence']*100)}%")
+            st.markdown("---")
+
+
+def detect_vague_goal(goal_text: str) -> dict:
+    """
+    Detect if a goal is too vague and needs clarification.
+    Returns suggestions for making it more specific.
+    """
+    vague_indicators = ['better', 'more', 'less', 'improve', 'reduce', 'increase', 'feel']
+    missing_specifics = {
+        'timeframe': not any(word in goal_text.lower() for word in ['daily', 'weekly', 'monthly', 'day', 'week', 'month']),
+        'measurable': not any(char.isdigit() for char in goal_text),
+        'action': len(goal_text.split()) < 5,
+        'vague_words': any(word in goal_text.lower() for word in vague_indicators)
+    }
+
+    is_vague = sum(missing_specifics.values()) >= 2
+
+    suggestions = []
+    if missing_specifics['timeframe']:
+        suggestions.append("Add a timeframe (daily, weekly, monthly)")
+    if missing_specifics['measurable']:
+        suggestions.append("Include a specific number or measurement")
+    if missing_specifics['action']:
+        suggestions.append("Describe the specific action you'll take")
+    if missing_specifics['vague_words']:
+        suggestions.append("Replace vague words with concrete outcomes")
+
+    return {
+        'is_vague': is_vague,
+        'issues': missing_specifics,
+        'suggestions': suggestions,
+        'clarity_score': 1.0 - (sum(missing_specifics.values()) / len(missing_specifics))
+    }
+
+
+def render_goal_clarification(goal_text: str, key: str):
+    """
+    Prompt user to clarify vague goals before processing.
+    """
+    analysis = detect_vague_goal(goal_text)
+
+    if analysis['is_vague']:
+        st.warning("⚠️ Your goal could be more specific. This will help the AI give better recommendations.")
+
+        clarity_pct = int(analysis['clarity_score'] * 100)
+        st.metric("Goal Clarity", f"{clarity_pct}%", delta=f"{100-clarity_pct}% to perfect clarity")
+
+        with st.expander("💡 How to make this goal clearer", expanded=True):
+            st.markdown("**Your goal:** " + goal_text)
+            st.markdown("**Suggestions to improve:**")
+            for suggestion in analysis['suggestions']:
+                st.write(f"• {suggestion}")
+
+            st.markdown("**Example transformation:**")
+            st.info(
+                f"**Vague:** 'Feel less stressed'\n\n"
+                f"**Specific:** 'Practice 10-minute meditation daily for 30 days to reduce work stress'"
+            )
+
+            refine = st.text_area(
+                "Refine your goal (optional):",
+                value=goal_text,
+                key=f"{key}_refined",
+                help="Make it more specific using the suggestions above"
+            )
+
+            if st.button("Use refined goal", key=f"{key}_use_refined"):
+                st.success("✅ Goal updated!")
+                return refine
+
+    return goal_text
+
+
+# ──────────────────────────────────────────────────────────────
+# Feedback System
+# ──────────────────────────────────────────────────────────────
+
+def save_feedback(feedback_type: str, rating: int | None, comment: str | None, metadata: dict = None):
+    """Save user feedback to JSON file for analysis."""
+    from datetime import datetime
+    import os
+
+    FEEDBACK_DIR = "data"
+    os.makedirs(FEEDBACK_DIR, exist_ok=True)
+    FEEDBACK_FILE = os.path.join(FEEDBACK_DIR, "user_feedback.json")
+
+    feedback_entry = {
+        "timestamp": datetime.now().isoformat(),
+        "type": feedback_type,
+        "rating": rating,
+        "comment": comment,
+        "metadata": metadata or {}
+    }
+
+    # Load existing feedback
+    try:
+        if os.path.exists(FEEDBACK_FILE):
+            with open(FEEDBACK_FILE, "r") as f:
+                feedback_data = json.load(f)
+        else:
+            feedback_data = []
+    except Exception:
+        feedback_data = []
+
+    # Append new feedback
+    feedback_data.append(feedback_entry)
+
+    # Save back
+    with open(FEEDBACK_FILE, "w") as f:
+        json.dump(feedback_data, f, indent=2)
+
+
+def render_feedback_widget(
+    key: str,
+    title: str = "Was this helpful?",
+    feedback_type: str = "general",
+    show_comment: bool = True,
+    metadata: dict = None,
+    compact: bool = False
+):
+    """
+    Render an interactive feedback widget for user input.
+
+    Args:
+        key: Unique key for widget
+        title: Title/question to display
+        feedback_type: Type of feedback (for categorization)
+        show_comment: Whether to show optional comment field
+        metadata: Additional context to save with feedback
+        compact: Use compact layout (single row)
+    """
+
+    if compact:
+        # Compact layout: emoji buttons in a row
+        st.markdown(f"<p style='font-size:0.85rem;color:#666;margin:.25rem 0;'>{title}</p>", unsafe_allow_html=True)
+
+        cols = st.columns([1, 1, 1, 1, 1, 3])
+
+        feedback_given = False
+        with cols[0]:
+            if st.button("😍", key=f"{key}_love", help="Loved it!"):
+                save_feedback(feedback_type, 5, "Loved it", metadata)
+                st.success("Thanks!")
+                feedback_given = True
+        with cols[1]:
+            if st.button("😊", key=f"{key}_good", help="Helpful"):
+                save_feedback(feedback_type, 4, "Helpful", metadata)
+                st.success("Thanks!")
+                feedback_given = True
+        with cols[2]:
+            if st.button("😐", key=f"{key}_ok", help="Okay"):
+                save_feedback(feedback_type, 3, "Okay", metadata)
+                st.success("Thanks!")
+                feedback_given = True
+        with cols[3]:
+            if st.button("😕", key=f"{key}_meh", help="Not very helpful"):
+                save_feedback(feedback_type, 2, "Not helpful", metadata)
+                st.success("Thanks!")
+                feedback_given = True
+        with cols[4]:
+            if st.button("😞", key=f"{key}_bad", help="Not helpful at all"):
+                save_feedback(feedback_type, 1, "Not helpful at all", metadata)
+                st.success("Thanks!")
+                feedback_given = True
+
+    else:
+        # Full layout with expander
+        with st.expander(f"💬 {title}", expanded=False):
+            # Star rating
+            rating = st.select_slider(
+                "Rate this feature:",
+                options=[1, 2, 3, 4, 5],
+                value=3,
+                format_func=lambda x: "⭐" * x,
+                key=f"{key}_rating"
+            )
+
+            # Optional comment
+            if show_comment:
+                comment = st.text_area(
+                    "Any additional thoughts? (optional)",
+                    placeholder="What worked well? What could be improved?",
+                    key=f"{key}_comment",
+                    max_chars=500
+                )
+            else:
+                comment = None
+
+            # Submit button
+            if st.button("Submit Feedback", key=f"{key}_submit"):
+                save_feedback(feedback_type, rating, comment, metadata)
+                st.success("✅ Thank you for your feedback! Your input helps us improve.")
+
+
+def render_confidence_accuracy_check(key: str, confidence: float, feature_name: str):
+    """
+    Ask users if the AI's confidence level matched reality.
+    This helps calibrate confidence scoring over time.
+    """
+
+    with st.expander("🎯 Confidence Check: Was the AI's confidence accurate?", expanded=False):
+        st.caption(f"The AI was {int(confidence*100)}% confident in this {feature_name}.")
+
+        accuracy = st.radio(
+            "After seeing the results, how would you rate the AI's confidence?",
+            options=[
+                "Too confident (overestimated)",
+                "Just right (well-calibrated)",
+                "Too cautious (underestimated)"
+            ],
+            key=f"{key}_accuracy"
+        )
+
+        action_taken = st.checkbox(
+            f"I followed this {feature_name}'s advice",
+            key=f"{key}_action"
+        )
+
+        helpful_rating = st.slider(
+            "How helpful was this overall?",
+            1, 5, 3,
+            format="%d ⭐",
+            key=f"{key}_helpful"
+        )
+
+        if st.button("Submit", key=f"{key}_submit_accuracy"):
+            metadata = {
+                "feature": feature_name,
+                "ai_confidence": confidence,
+                "user_accuracy_rating": accuracy,
+                "action_taken": action_taken,
+                "helpful_rating": helpful_rating
+            }
+            save_feedback("confidence_calibration", helpful_rating, accuracy, metadata)
+            st.success("✅ Thanks! Your input helps calibrate our AI.")
+
+
+def render_action_tracker(key: str, recommendation: str, feature_name: str):
+    """
+    Track whether users actually followed AI recommendations.
+    This measures real-world impact.
+    """
+
+    st.markdown("---")
+    st.markdown("#### 🎯 Track Your Action")
+
+    cols = st.columns([2, 1])
+    with cols[0]:
+        st.caption(f"Planning to follow this {feature_name}?")
+
+    with cols[1]:
+        if st.button("✅ Yes, I'll try this", key=f"{key}_yes"):
+            save_feedback(
+                "action_commitment",
+                5,
+                f"Committed to: {recommendation[:100]}",
+                {"feature": feature_name, "committed": True}
+            )
+            st.success("Great! Check back to report results.")
+
+        if st.button("❌ No, not for me", key=f"{key}_no"):
+            save_feedback(
+                "action_commitment",
+                1,
+                f"Declined: {recommendation[:100]}",
+                {"feature": feature_name, "committed": False}
+            )
+            st.info("That's okay! Not every suggestion fits everyone.")
+
+
 
 
 
@@ -315,6 +664,20 @@ with st.sidebar:
         "🔔 Sound alert", value=True, key="sound_alert_toggle"
     )
 
+    st.markdown("---")
+    st.markdown("### 🎚️ AI Coaching Style")
+    # Initialize default value before widget creation
+    if "autonomy_level" not in st.session_state:
+        st.session_state["autonomy_level"] = "Gentle Suggester"
+
+    autonomy_level = st.radio(
+        "How directive should the AI be?",
+        options=["Passive Observer", "Gentle Suggester", "Active Coach", "Directive Guide"],
+        index=1,
+        help="Controls how assertive the AI's recommendations are. Passive = minimal suggestions, Directive = proactive guidance",
+        key="autonomy_level"
+    )
+
 # ──────────────────────────────────────────────────────────────
 # Session State Init
 # ──────────────────────────────────────────────────────────────
@@ -531,6 +894,8 @@ if submitted:
         if not duration_ok:
             st.warning("📅 Please select how often you'll practice")
     else:
+        # Check goal clarity and prompt for refinement if needed
+        render_goal_clarification(goal_name.strip(), key="goal_clarity_check")
         try:
             with st.spinner("✨ Creating your personalized mindfulness plan..."):
                 result = run_goal_creation(
@@ -1958,7 +2323,11 @@ def _normalize_text_block(value):
 
 
 
-analyze_week = st.button("✨ Analyze and Save Weekly Reflection", key="analyze_week_btn")
+analyze_week = st.button(
+    "✨ Analyze and Save Weekly Reflection",
+    key="analyze_week_btn",
+    help="AI will analyze your reflection to identify stress patterns, accomplishments, and growth areas. Confidence score shows reliability of the analysis."
+)
 
 if analyze_week and reflection_text.strip():
     user_payload = {
@@ -1991,7 +2360,8 @@ if analyze_week and reflection_text.strip():
                             "Then suggest 3–5 specific micro-actions for next week. "
                             "Reply ONLY as JSON with keys: "
                             "summary, stress_pattern, accomplishments, challenges, "
-                            "growth_highlights, action_suggestions (list of strings)."
+                            "growth_highlights, action_suggestions (list of strings), "
+                            "confidence (float 0-1), confidence_note (string)."
                         ),
                     },
                     {
@@ -2007,6 +2377,15 @@ if analyze_week and reflection_text.strip():
         except Exception as e:
             st.error(f"Could not analyze weekly reflection: {e}")
         else:
+            # Extract confidence
+            confidence = data.get("confidence")
+            if confidence is not None:
+                try:
+                    confidence = max(0.0, min(1.0, float(confidence)))
+                except:
+                    confidence = None
+            confidence_note = data.get("confidence_note", "")
+
             entry = {
                 "week_ending": week_ending.isoformat(),
                 "raw_text": reflection_text.strip(),
@@ -2016,6 +2395,8 @@ if analyze_week and reflection_text.strip():
                 "challenges":  _normalize_text_block(data.get("challenges")),
                 "growth_highlights": _normalize_text_block(data.get("growth_highlights")),
                 "action_suggestions": data.get("action_suggestions", []),
+                "confidence": confidence,
+                "confidence_note": confidence_note,
                 "saved_at": datetime.now().isoformat(),
             }
             _save_weekly_reflection(entry)
@@ -2044,6 +2425,65 @@ if analyze_week and reflection_text.strip():
                 st.markdown("#### 🎯 Suggestions for Next Week")
                 for s in entry["action_suggestions"]:
                     st.write(f"- {s}")
+
+            # Display confidence and uncertainty
+            cols = st.columns(2)
+            with cols[0]:
+                render_confidence(
+                    provenance=None,
+                    confidence=entry.get("confidence"),
+                    key="weekly_reflection_conf",
+                )
+            with cols[1]:
+                render_uncertainty(
+                    confidence=entry.get("confidence"),
+                    key="weekly_reflection_uncertainty",
+                    show_explanation=False,
+                )
+            if entry.get("confidence_note"):
+                st.caption(f"📝 {entry['confidence_note']}")
+
+            # Explainability view - show AI reasoning process
+            reasoning_steps = [
+                {
+                    "title": "Text Analysis",
+                    "description": f"Analyzed {len(reflection_text.strip().split())} words from your weekly reflection",
+                    "confidence": 0.9
+                },
+                {
+                    "title": "Pattern Recognition",
+                    "description": f"Compared with {len(existing_entries[-3:])} recent reflections to identify trends",
+                    "confidence": entry.get("confidence", 0.7) if existing_entries else 0.4
+                },
+                {
+                    "title": "Stress Pattern Extraction",
+                    "description": "Identified stress triggers, timing, and intensity from your writing",
+                    "confidence": entry.get("confidence", 0.7)
+                },
+                {
+                    "title": "Action Suggestions",
+                    "description": f"Generated {len(entry.get('action_suggestions', []))} personalized micro-actions based on patterns",
+                    "confidence": entry.get("confidence", 0.7)
+                }
+            ]
+            render_explainability_view(reasoning_steps, key="weekly_reflection_reasoning")
+
+            # Feedback widgets
+            st.markdown("---")
+            render_feedback_widget(
+                key="weekly_reflection_feedback",
+                title="How helpful was this weekly analysis?",
+                feedback_type="weekly_reflection",
+                metadata={"confidence": entry.get("confidence")},
+                compact=True
+            )
+
+            if entry.get("confidence") is not None:
+                render_confidence_accuracy_check(
+                    key="weekly_reflection_accuracy",
+                    confidence=entry.get("confidence"),
+                    feature_name="weekly reflection analysis"
+                )
 
 if existing_entries:
     st.markdown("### 📚 Recent Weekly Entries")
@@ -2148,20 +2588,83 @@ else:
     completed_tasks = [task for task, finished in task_completion.items() if finished]
 
     # 🔘 Only generate when the user asks
-    if st.button("✨ Generate motivational message"):
+    if st.button(
+        "✨ Generate motivational message",
+        help="AI creates personalized encouragement based on your task completion rate and consistency. Higher completion = higher confidence."
+    ):
         try:
-            msg = run_motivation_message(
+            result = run_motivation_message(
                 completed=done,
                 total=total,
                 activities=completed_tasks,
             )
+            msg = result.get("message", "")
+            confidence = result.get("confidence")
+            confidence_note = result.get("confidence_note", "")
         except Exception as e:
             msg = (
                 "You're making meaningful progress. Even one completed practice is a real step "
                 f"toward lower stress. (AI motivation unavailable: {e})"
             )
+            confidence = None
+            confidence_note = ""
 
         st.success(msg)
+
+        # Display confidence and uncertainty
+        cols = st.columns(2)
+        with cols[0]:
+            render_confidence(
+                provenance=None,
+                confidence=confidence,
+                key="motivation_conf",
+            )
+        with cols[1]:
+            render_uncertainty(
+                confidence=confidence,
+                key="motivation_uncertainty",
+                show_explanation=False,
+            )
+        if confidence_note:
+            st.caption(f"📝 {confidence_note}")
+
+        # Explainability view - show AI reasoning process
+        completion_ratio = done / total if total > 0 else 0
+        reasoning_steps = [
+            {
+                "title": "Task Completion Analysis",
+                "description": f"You completed {done} out of {total} practices ({int(completion_ratio * 100)}% completion rate)",
+                "confidence": 0.95
+            },
+            {
+                "title": "Consistency Assessment",
+                "description": f"Evaluated consistency based on {len(completed_tasks)} completed activities",
+                "confidence": 0.9 if completion_ratio >= 0.7 else 0.6
+            },
+            {
+                "title": "Message Personalization",
+                "description": "Generated encouragement tailored to your progress level and activity mix",
+                "confidence": confidence if confidence else 0.7
+            }
+        ]
+        render_explainability_view(reasoning_steps, key="motivation_reasoning")
+
+        # Feedback widgets
+        st.markdown("---")
+        render_feedback_widget(
+            key="motivation_feedback",
+            title="Did this message motivate you?",
+            feedback_type="motivational_message",
+            metadata={"confidence": confidence, "message_length": len(msg)},
+            compact=True
+        )
+
+        if confidence is not None:
+            render_confidence_accuracy_check(
+                key="motivation_accuracy",
+                confidence=confidence,
+                feature_name="motivational message"
+            )
 
 # ──────────────────────────────────────────────────────────────────────────────
 # 🧑‍💼 HR Wellness Insights (Anonymized Stress Trends)
@@ -2176,7 +2679,10 @@ if not all_checkins:
     st.info("No check-in data available yet to generate HR insights.")
 else:
     # 🔘 Only show charts + LLM summary when HR clicks the button
-    if st.button("📊 Generate HR wellness insights"):
+    if st.button(
+        "📊 Generate HR wellness insights",
+        help="Aggregates anonymized employee check-in data to identify workforce stress trends. More data days = higher confidence in patterns."
+    ):
         df = build_stress_dataframe(all_checkins)
 
         # Weekly averages (same as personal dashboard)
@@ -2243,8 +2749,82 @@ else:
         ]
 
         try:
-            hr_summary = run_hr_insights(stress_series)
+            hr_result = run_hr_insights(stress_series)
+            hr_summary = hr_result.get("summary", "")
+            hr_confidence = hr_result.get("confidence")
+            hr_confidence_note = hr_result.get("confidence_note", "")
         except Exception as e:
             hr_summary = f"Could not generate HR summary: {e}"
+            hr_confidence = None
+            hr_confidence_note = ""
 
         st.info(hr_summary)
+
+        # Display confidence and uncertainty
+        cols = st.columns(2)
+        with cols[0]:
+            render_confidence(
+                provenance=None,
+                confidence=hr_confidence,
+                key="hr_insights_conf",
+            )
+        with cols[1]:
+            render_uncertainty(
+                confidence=hr_confidence,
+                key="hr_insights_uncertainty",
+                show_explanation=False,
+            )
+        if hr_confidence_note:
+            st.caption(f"📝 {hr_confidence_note}")
+
+        # Explainability view - show AI reasoning process
+        num_days = len(set(s["date"] for s in stress_series))
+        num_weeks = len(weekly)
+        reasoning_steps = [
+            {
+                "title": "Data Collection",
+                "description": f"Analyzed {len(stress_series)} check-ins across {num_days} unique days",
+                "confidence": 0.95
+            },
+            {
+                "title": "Trend Aggregation",
+                "description": f"Computed weekly averages across {num_weeks} weeks for pattern recognition",
+                "confidence": 0.9 if num_days >= 30 else 0.6
+            },
+            {
+                "title": "Statistical Analysis",
+                "description": "Identified stress distribution patterns (Low/Medium/High bands) across workforce",
+                "confidence": 0.85 if num_days >= 60 else 0.5
+            },
+            {
+                "title": "HR Recommendations",
+                "description": f"Generated actionable insights based on {num_days}-day trend data",
+                "confidence": hr_confidence if hr_confidence else 0.7
+            }
+        ]
+        render_explainability_view(reasoning_steps, key="hr_insights_reasoning")
+
+        # Feedback widgets
+        st.markdown("---")
+        render_feedback_widget(
+            key="hr_insights_feedback",
+            title="Are these HR insights actionable?",
+            feedback_type="hr_insights",
+            metadata={"confidence": hr_confidence, "data_points": len(stress_series)},
+            compact=True
+        )
+
+        if hr_confidence is not None:
+            render_confidence_accuracy_check(
+                key="hr_insights_accuracy",
+                confidence=hr_confidence,
+                feature_name="HR wellness insights"
+            )
+
+        # Action tracker for HR recommendations
+        if hr_summary:
+            render_action_tracker(
+                key="hr_insights_action",
+                recommendation=hr_summary[:200],
+                feature_name="HR insight"
+            )

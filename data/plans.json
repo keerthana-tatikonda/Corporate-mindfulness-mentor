@@ -927,5 +927,41 @@
     "confidence": 0.78,
     "confidence_note": "The plan is tailored specifically for workplace stress management and incorporates activities proven effective in such settings.",
     "saved_at": 1764549215
+  },
+  {
+    "goal": "add",
+    "suggested_activities": [
+      "Set a daily intention at the start of your day for what you want to 'add' to your life, writing it down in a journal.",
+      "Practice a focused breathing exercise for 5 minutes each morning, visualizing how adding positive elements enhances your well-being.",
+      "Engage in a gratitude meditation where you reflect on three new things you can add to your routine or mindset, spending at least 3 minutes on each."
+    ],
+    "ai_summary": "This plan encourages daily reflection and visualization to enhance personal growth by consciously adding positive aspects to life.",
+    "confidence": 0.85,
+    "confidence_note": "The activities are specifically designed around the concept of 'adding', focusing on intentions and gratitude which align with mindfulness practices.",
+    "saved_at": 1764553298
+  },
+  {
+    "goal": "is to reduce weight",
+    "suggested_activities": [
+      "Mindful Meal Preparation: Spend 10-15 minutes focusing on the colors, textures, and aromas of the ingredients as you prepare healthy meals. This will enhance your awareness of food choices.",
+      "Walking Meditation: Incorporate a 20-minute walking meditation daily during lunch breaks to combine mindfulness with light physical activity. Focus on each step and your breathing to reduce stress and maintain motivation.",
+      "Gratitude Journaling Post-Workout: After any physical activity, take five minutes to write down three things you appreciate about your body\u2019s capabilities, reinforcing a positive mindset toward weight loss."
+    ],
+    "ai_summary": "This plan combines mindful eating practices, movement awareness through walking meditations, and post-exercise reflection to support your weight reduction goal effectively.",
+    "confidence": 0.75,
+    "confidence_note": "These activities directly address both mindfulness and weight loss while considering your schedule for physical activities.",
+    "saved_at": 1764554008
+  },
+  {
+    "goal": "reduce weight",
+    "suggested_activities": [
+      "Mindful Eating: Spend 10 minutes before each meal practicing mindful eating, focusing on the taste, texture, and aroma of food to help reduce overeating.",
+      "Breath Awareness during Walks: While walking your 4 miles, take 5 minutes at the start to focus solely on your breath, helping to set a calm and purposeful intention for your exercise.",
+      "Gratitude Journaling: After each walk, write down three things you're grateful for related to your body and health. This fosters positive associations with your weight loss journey."
+    ],
+    "ai_summary": "This plan combines mindful practices focused on eating habits and physical activity to support weight reduction efforts. The activities are designed to enhance awareness and foster a healthier relationship with food and exercise.",
+    "confidence": 0.78,
+    "confidence_note": "These activities directly link mindfulness practices with behavioral changes that can contribute significantly to weight management.",
+    "saved_at": 1764600376
   }
 ]

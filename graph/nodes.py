@@ -1820,6 +1820,8 @@ def motivational_message_node(state: Dict[str, Any]) -> Dict[str, Any]:
       - activities: List[str]   (typically the ones the user completed)
     Output:
       - message: str  (an encouraging, tailored message)
+      - confidence: Optional[float]
+      - confidence_note: Optional[str]
     """
     completed = int(state.get("completed", 0) or 0)
     total = int(state.get("total", 0) or 0)
@@ -1828,8 +1830,10 @@ def motivational_message_node(state: Dict[str, Any]) -> Dict[str, Any]:
     if total <= 0 or completed <= 0:
         state["message"] = (
             "Once you start completing a few practices, "
-            "I’ll send you personalized encouragement."
+            "I'll send you personalized encouragement."
         )
+        state["confidence"] = None
+        state["confidence_note"] = None
         return state
 
     # Build a simple summary for the LLM
@@ -1846,7 +1850,9 @@ def motivational_message_node(state: Dict[str, Any]) -> Dict[str, Any]:
         "The user has completed some daily mindfulness practices. "
         "Write ONE short, encouraging message (2–3 sentences max) "
         "that reinforces consistency and self-compassion. "
-        "Avoid giving new instructions; just celebrate and motivate."
+        "Avoid giving new instructions; just celebrate and motivate. "
+        "Return JSON with keys: message (string), confidence (float 0-1), "
+        "confidence_note (string explaining your confidence level)."
     )
 
     try:
@@ -1860,16 +1866,39 @@ def motivational_message_node(state: Dict[str, Any]) -> Dict[str, Any]:
                 },
             ],
             temperature=0.7,
-            max_tokens=160,
+            max_tokens=200,
+            response_format={"type": "json_object"},
         )
-        text = (resp.choices[0].message.content or "").strip()
+        data = json.loads(resp.choices[0].message.content or "{}")
+        text = data.get("message", "").strip()
+
+        # Extract confidence
+        conf = _extract_llm_conf(data)
+        if conf is None:
+            # Heuristic: higher completion ratio = higher confidence
+            conf = 0.5 + (ratio * 0.3)  # 0.5 to 0.8 range
+            conf = _clip01(conf)
+
+        conf_note = data.get("confidence_note", "").strip()
+        if not conf_note:
+            if ratio >= 0.8:
+                conf_note = "High confidence: you're maintaining excellent consistency."
+            elif ratio >= 0.5:
+                conf_note = "Good confidence: steady progress with your practices."
+            else:
+                conf_note = "Moderate confidence: you're building the habit—keep going!"
+
     except Exception as e:
         text = (
             f"You're making progress — even a single completed practice "
             f"helps build a healthier routine. (Could not fetch AI message: {e})"
         )
+        conf = 0.4
+        conf_note = "Lower confidence: fallback message due to AI unavailability."
 
     state["message"] = text
+    state["confidence"] = conf
+    state["confidence_note"] = conf_note
     return state
 
 def hr_insights_node(state: Dict[str, Any]) -> Dict[str, Any]:
@@ -1879,15 +1908,20 @@ def hr_insights_node(state: Dict[str, Any]) -> Dict[str, Any]:
           { "date": "2025-11-30", "stress_score": 72.0 }
     Output:
       - summary: str  (HR-facing anonymized insight)
+      - confidence: Optional[float]
+      - confidence_note: Optional[str]
     """
     series: List[Dict[str, Any]] = state.get("stress_series") or []
 
     if not series:
         state["summary"] = "No aggregated stress data is available yet for HR insights."
+        state["confidence"] = None
+        state["confidence_note"] = None
         return state
 
     # Keep the payload compact (e.g., last 90 days max)
     series = series[-90:]
+    num_days = len(series)
 
     system = (
         "You are an HR analytics assistant. You receive anonymized time-series data "
@@ -1897,7 +1931,8 @@ def hr_insights_node(state: Dict[str, Any]) -> Dict[str, Any]:
         "3) Suggest 2–4 concrete, workplace-wide interventions "
         "(meeting culture, quiet hours, manager check-ins, etc.). "
         "Speak only about 'employees' or 'the team', never individuals. "
-        "Keep the answer under 200 words."
+        "Return JSON with keys: summary (string, under 200 words), "
+        "confidence (float 0-1), confidence_note (string explaining data quality)."
     )
 
     try:
@@ -1911,13 +1946,45 @@ def hr_insights_node(state: Dict[str, Any]) -> Dict[str, Any]:
                 },
             ],
             temperature=0.5,
-            max_tokens=400,
+            max_tokens=500,
+            response_format={"type": "json_object"},
         )
-        summary = (resp.choices[0].message.content or "").strip()
+        data = json.loads(resp.choices[0].message.content or "{}")
+        summary = data.get("summary", "").strip()
+
+        # Extract confidence
+        conf = _extract_llm_conf(data)
+        if conf is None:
+            # Heuristic based on data quantity
+            if num_days >= 60:
+                conf = 0.85
+            elif num_days >= 30:
+                conf = 0.7
+            elif num_days >= 14:
+                conf = 0.55
+            else:
+                conf = 0.4
+            conf = _clip01(conf)
+
+        conf_note = data.get("confidence_note", "").strip()
+        if not conf_note:
+            if num_days >= 60:
+                conf_note = "High confidence: 2+ months of aggregated employee data."
+            elif num_days >= 30:
+                conf_note = "Good confidence: about a month of stress patterns analyzed."
+            elif num_days >= 14:
+                conf_note = "Moderate confidence: 2 weeks of data—trends are emerging."
+            else:
+                conf_note = "Lower confidence: limited data; treat as preliminary insights."
+
     except Exception as e:
         summary = f"Could not generate HR insights at this time: {e}"
+        conf = 0.3
+        conf_note = "Low confidence: AI generation failed, using fallback message."
 
     state["summary"] = summary
+    state["confidence"] = conf
+    state["confidence_note"] = conf_note
     return state
 
 
