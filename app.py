@@ -933,11 +933,49 @@ if st.button("🌼 Take a Mindful Break", key="manual_break"):
     st.info("✅ Mindful break recorded successfully.")
 
 if st.button("🤖 AI-Powered Mindful Break"):
-    llm_output = run_llm_break_workflow()
+    llm_output = run_llm_break_workflow() or {}
+
     st.markdown("### 🌼 AI-Powered Mindful Suggestion")
-    st.info(llm_output["message"])
-    st.success(llm_output["reflection"])
-    st.caption(f"💡 {llm_output['recommendation']}")
+
+    # Main suggestion
+    if llm_output.get("message"):
+        st.info(llm_output["message"])
+
+    if llm_output.get("recommendation"):
+        st.success(llm_output["recommendation"])
+
+    # 🔍 Confidence bar (interaction design: visual cue)
+    render_confidence(
+        provenance=None,
+        confidence=llm_output.get("confidence"),
+        key="break_confidence",
+    )
+    if llm_output.get("confidence_note"):
+        st.caption(llm_output["confidence_note"])
+
+    # 🧠 Explainability View — why this break?
+    with st.expander("Why this break? (Explainability view)"):
+        if llm_output.get("reflection"):
+            st.write(llm_output["reflection"])
+
+        st.caption(
+            "This explanation shows why the mentor suggested this kind of break. "
+            "You stay in control — feel free to ignore or adapt any suggestion."
+        )
+    # ──────────────────────────────────────────────────────────────
+    # 🔒 Trust and Predictability by Design
+    # ──────────────────────────────────────────────────────────────
+st.markdown("### 🔒 Trust and Predictability by Design")
+
+st.write(
+        "Mindful break suggestions are generated using a three-step reasoning "
+        "flow (reminder → reflection → recommendation). The confidence bar above "
+        "shows how reliable the mentor believes today's suggestion is. "
+        "When confidence is lower, treat the suggestion as a gentle nudge rather "
+        "than a strong instruction — you stay fully in control of when and how "
+        "you take breaks."
+)
+
 
 
 enable_auto_breaks_main = st.checkbox(
@@ -1047,12 +1085,15 @@ if do_checkin:
         notes=notes or None,
     )
 
-    # 🔮 Pure AI-based adjustment with confidence (no rule-based fallback)
-    try:
-        adj = run_morning_checkin(ck)
-    except Exception as e:
-        st.error(f"Could not adjust based on check-in: {e}")
-    else:
+    # 🔄 Run the graph / LLM with a small spinner
+    with st.spinner("Adjusting your plan for today…"):
+        try:
+            adj = run_morning_checkin(ck)
+        except Exception as e:
+            st.error(f"Could not adjust based on check-in: {e}")
+            adj = None
+
+    if adj is not None:
         # ✅ Save check-in + AI adjustment for dashboards
         try:
             save_checkin(ck.model_dump(), adj.model_dump())
@@ -1061,13 +1102,22 @@ if do_checkin:
                 f"Check-in saved only for this session (storage error: {e})"
             )
 
-        # 🤖 AI feedback section
+        # 🤖 AI feedback section (keeps your heading)
         st.markdown("### 🤖 AI Feedback on Today’s Check-In")
 
         if getattr(adj, "summary", None):
             st.success(adj.summary)
 
-        # Show AI confidence bar
+        # Focus + risk flags (unchanged order)
+        if getattr(adj, "focus_for_today", None):
+            st.markdown("**Focus for today**")
+            for a in adj.focus_for_today:
+                st.write(f"- {a}")
+
+        if getattr(adj, "risk_flags", None):
+            st.caption("Flags: " + ", ".join(adj.risk_flags))
+
+        # 🔵 Confidence bar (visual cue for uncertainty)
         render_confidence(
             provenance=None,
             confidence=getattr(adj, "confidence", None),
@@ -1077,14 +1127,36 @@ if do_checkin:
         if note:
             st.caption(f"Confidence note: {note}")
 
-        # Focus + risk flags
-        if getattr(adj, "focus_for_today", None):
-            st.markdown("**Focus for today**")
-            for a in adj.focus_for_today:
-                st.write(f"- {a}")
+        # 🔍 Explainability View – why these suggestions?
+        with st.expander("🔍 Why these suggestions? (Explainability view)"):
+            st.markdown(
+                f"""
+- Mood: **{mood or '—'}**
+- Sleep quality: **{sleep or '—'}**
+- Energy: **{energy or '—'}**
+- Workload: **{workload or '—'}**
+                """
+            )
+            if notes:
+                st.markdown(f"- Notes: _{notes}_")
 
-        if getattr(adj, "risk_flags", None):
-            st.caption("Flags: " + ", ".join(adj.risk_flags))
+            if getattr(adj, "risk_flags", None):
+                st.markdown(
+                    "**Risk flags detected:** " + ", ".join(adj.risk_flags)
+                )
+
+            st.caption(
+                "This view shows which signals influenced today's micro-plan. "
+                "You stay in control — feel free to ignore or modify any suggestion."
+            )
+st.markdown("#### 🔐 Trust and Predictability by Design")
+st.caption(
+    "The Morning Wellness Check-In uses only the mood, sleep, energy, workload, "
+    "and notes you provide above. The confidence bar reflects how reliable the "
+    "mentor believes today’s suggestions are; when confidence is lower, treat "
+    "the plan as a gentle suggestion rather than a prescription."
+)
+
 
 
 

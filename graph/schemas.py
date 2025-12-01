@@ -44,8 +44,12 @@ class CheckIn(BaseModel):
 
 class DayAdjustment(BaseModel):
     summary: Optional[str] = None
-    focus_for_today: Optional[List[str]] = None   # 3–5 short actions
-    risk_flags: Optional[List[str]] = None        # e.g., ["poor sleep", "heavy workload"]
+    focus_for_today: List[str] = Field(default_factory=list)
+    risk_flags: List[str] = Field(default_factory=list)
+
+    # NEW for Interaction Design / confidence
+    confidence: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    confidence_note: Optional[str] = None
 
 # --- Profile Personalization & Workload Adaptation ---
 

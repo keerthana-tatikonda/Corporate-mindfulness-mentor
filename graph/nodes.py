@@ -104,6 +104,13 @@ def _to_list(value):
     # fallback: single value -> one-item list
     return [str(value).strip()] if str(value).strip() else []
 
+def _to_list_checkin(value) -> list[str]:
+    """Like _to_list, but always returns List[str] and tolerates None / scalars."""
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return [str(x).strip() for x in value if str(x).strip()]
+    return _to_list(value)
 
 
 # --- Constants ---
@@ -1367,7 +1374,6 @@ def _rule_based_fallback(checkin):
     return items, summary
 
 
-
 def morning_checkin_node(state: Dict[str, Any]) -> Dict[str, Any]:
     ck = state.get("checkin")
     if not ck:
@@ -1375,15 +1381,19 @@ def morning_checkin_node(state: Dict[str, Any]) -> Dict[str, Any]:
 
     # If API key is missing, return personalized rule-based fallback
     if not os.environ.get("OPENAI_API_KEY"):
-        data = _rule_based_fallback(ck)  # <- returns dict
+        items, summary = _rule_based_fallback(ck)
+        # conservative confidence for rule-based path
+        conf = 0.4
+        note = (
+            "Lower confidence: this plan is rule-based only, "
+            "without AI personalization for today."
+        )
         safe_payload = {
-            "summary": (
-                str(data.get("summary")).strip()
-                if data.get("summary") is not None
-                else None
-            ),
-            "focus_for_today": _to_list(data.get("focus_for_today")),
-            "risk_flags": _to_list(data.get("risk_flags")),
+            "summary": summary,
+            "focus_for_today": _to_list_checkin(items),
+            "risk_flags": [],
+            "confidence": conf,
+            "confidence_note": note,
         }
         try:
             state["day_adjustment"] = DayAdjustment(**safe_payload).model_dump()
@@ -1394,11 +1404,12 @@ def morning_checkin_node(state: Dict[str, Any]) -> Dict[str, Any]:
                 safe_payload,
             )
             state["day_adjustment"] = DayAdjustment(
-                summary=safe_payload.get("summary")
-                or "Plan adjusted for today.",
+                summary=safe_payload.get("summary") or "Plan adjusted for today.",
                 focus_for_today=safe_payload.get("focus_for_today")
                 or ["1-min mindful breath before each meeting"],
                 risk_flags=safe_payload.get("risk_flags") or [],
+                confidence=conf,
+                confidence_note=note,
             ).model_dump()
         return state
 
@@ -1406,10 +1417,49 @@ def morning_checkin_node(state: Dict[str, Any]) -> Dict[str, Any]:
         f"mood={ck.get('mood')}, sleep_quality={ck.get('sleep_quality')}, "
         f"energy={ck.get('energy')}, workload={ck.get('workload')}\n"
         f"notes={ck.get('notes') or ''}\n\n"
-        "Return JSON with: summary, focus_for_today (3-5 items), risk_flags.\n"
-        "Each action must explicitly reflect at least one of: mood, sleep_quality, energy, or workload, "
-        "and differ if any of these inputs change."
+        "Return JSON with: summary, focus_for_today (3-5 items), risk_flags, "
+        "and optionally confidence (0-1) and confidence_note.\n"
+        "Each action must explicitly reflect at least one of: mood, sleep_quality, "
+        "energy, or workload, and differ if any of these inputs change."
     )
+
+    def _infer_conf_and_note(data_dict, focus_list) -> tuple[Optional[float], Optional[str]]:
+        # try to read confidence directly
+        raw_conf = data_dict.get("confidence") if isinstance(data_dict, dict) else None
+        conf = None
+        if isinstance(raw_conf, (int, float)):
+            conf = _clip01(raw_conf)
+
+        # heuristic if model didn't send confidence
+        if conf is None:
+            n = len(focus_list)
+            base = 0.4
+            if n >= 3:
+                base += 0.2
+            if n >= 4:
+                base += 0.1
+            conf = _clip01(base)
+
+        note = (data_dict.get("confidence_note") or "").strip() if isinstance(
+            data_dict, dict
+        ) else ""
+
+        if not note:
+            if conf >= 0.8:
+                note = (
+                    "High confidence: suggestions align well with your check-in pattern."
+                )
+            elif conf >= 0.5:
+                note = (
+                    "Moderate confidence: plan fits your inputs reasonably well, "
+                    "but adjust anything that doesn’t feel right."
+                )
+            else:
+                note = (
+                    "Lower confidence: unusual combination of signals or short history; "
+                    "treat this as a gentle starting point."
+                )
+        return conf, note
 
     # Try 1: strict JSON mode
     try:
@@ -1423,9 +1473,8 @@ def morning_checkin_node(state: Dict[str, Any]) -> Dict[str, Any]:
         )
         data = json.loads(resp.choices[0].message.content or "{}")
 
-        # Validate the JSON-mode payload; if invalid/empty, force fallback to free-form
-        focus_list = _to_list(data.get("focus_for_today"))
-        risk_list = _to_list(data.get("risk_flags"))
+        focus_list = _to_list_checkin(data.get("focus_for_today"))
+        risk_list = _to_list_checkin(data.get("risk_flags"))
         summary_txt = (
             str(data.get("summary")).strip()
             if data.get("summary") is not None
@@ -1435,26 +1484,27 @@ def morning_checkin_node(state: Dict[str, Any]) -> Dict[str, Any]:
         if not focus_list:  # key requirement for your UI/tests
             raise ValueError("JSON-mode payload missing non-empty 'focus_for_today'")
 
+        conf, note = _infer_conf_and_note(data, focus_list)
+
         safe_payload = {
             "summary": summary_txt or None,
             "focus_for_today": focus_list,
             "risk_flags": risk_list,
+            "confidence": conf,
+            "confidence_note": note,
         }
 
         try:
             state["day_adjustment"] = DayAdjustment(**safe_payload).model_dump()
         except ValidationError as ve:
-            log.error(
-                "DayAdjustment validation failed (json mode): %s | payload=%r",
-                ve,
-                safe_payload,
-            )
+            log.error("DayAdjustment validation failed (json mode): %s | payload=%r", ve, safe_payload)
             state["day_adjustment"] = DayAdjustment(
-                summary=safe_payload.get("summary")
-                or "Plan adjusted for today.",
+                summary=safe_payload.get("summary") or "Plan adjusted for today.",
                 focus_for_today=safe_payload.get("focus_for_today")
                 or ["1-min mindful breath before each meeting"],
                 risk_flags=safe_payload.get("risk_flags") or [],
+                confidence=conf,
+                confidence_note=note,
             ).model_dump()
         return state
 
@@ -1471,38 +1521,42 @@ def morning_checkin_node(state: Dict[str, Any]) -> Dict[str, Any]:
             ],
         )
         content = resp.choices[0].message.content or ""
-        # handle ```json fenced output
         if content.strip().startswith("```"):
             start = content.find("{")
             end = content.rfind("}")
             if start != -1 and end != -1 and end > start:
                 content = content[start : end + 1]
 
-        data = json.loads(content or "{}")
+        data = json.loads(content)
+        focus_list = _to_list_checkin(data.get("focus_for_today"))
+        risk_list = _to_list_checkin(data.get("risk_flags"))
+        summary_txt = (
+            str(data.get("summary")).strip()
+            if data.get("summary") is not None
+            else None
+        )
+
+        conf, note = _infer_conf_and_note(data, focus_list)
+
         safe_payload = {
-            "summary": (
-                str(data.get("summary")).strip()
-                if data.get("summary") is not None
-                else None
-            ),
-            "focus_for_today": _to_list(data.get("focus_for_today")),
-            "risk_flags": _to_list(data.get("risk_flags")),
+            "summary": summary_txt,
+            "focus_for_today": focus_list,
+            "risk_flags": risk_list,
+            "confidence": conf,
+            "confidence_note": note,
         }
 
         try:
             state["day_adjustment"] = DayAdjustment(**safe_payload).model_dump()
         except ValidationError as ve:
-            log.error(
-                "DayAdjustment validation failed (free-form): %s | payload=%r",
-                ve,
-                safe_payload,
-            )
+            log.error("DayAdjustment validation failed (free-form): %s | payload=%r", ve, safe_payload)
             state["day_adjustment"] = DayAdjustment(
-                summary=safe_payload.get("summary")
-                or "Plan adjusted for today.",
+                summary=safe_payload.get("summary") or "Plan adjusted for today.",
                 focus_for_today=safe_payload.get("focus_for_today")
                 or ["1-min mindful breath before each meeting"],
                 risk_flags=safe_payload.get("risk_flags") or [],
+                confidence=conf,
+                confidence_note=note,
             ).model_dump()
         return state
 
@@ -1510,16 +1564,19 @@ def morning_checkin_node(state: Dict[str, Any]) -> Dict[str, Any]:
         log.error("Morning check-in free-form mode failed: %s", e)
 
     # Final safety net: deterministic rule-based plan
-    data = _rule_based_fallback(ck)
+    items, summary = _rule_based_fallback(ck)
+    conf = 0.4
+    note = (
+        "Lower confidence: using rule-based fallback because the AI "
+        "could not generate a reliable plan just now."
+    )
     state["day_adjustment"] = DayAdjustment(
-        summary=(
-            str(data.get("summary")).strip()
-            if data.get("summary") is not None
-            else "Plan adjusted for today."
-        ),
-        focus_for_today=_to_list(data.get("focus_for_today"))
+        summary=summary or "Plan adjusted for today.",
+        focus_for_today=_to_list_checkin(items)
         or ["1-min mindful breath before each meeting"],
-        risk_flags=_to_list(data.get("risk_flags")),
+        risk_flags=[],
+        confidence=conf,
+        confidence_note=note,
     ).model_dump()
     return state
 

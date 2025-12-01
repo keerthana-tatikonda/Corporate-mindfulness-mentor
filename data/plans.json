@@ -915,5 +915,17 @@
     "confidence": 0.78,
     "confidence_note": "The activities are specifically designed for improving focus within a corporate context and align with practical weekly implementation.",
     "saved_at": 1764542916
+  },
+  {
+    "goal": "reduce stress",
+    "suggested_activities": [
+      "Guided visualization session focusing on a peaceful nature scene for 15 minutes.",
+      "Weekly gratitude journaling every Friday, listing three positive moments from the week to shift focus from stressors.",
+      "Mindful breathing exercise before meetings, taking three deep breaths to center and ground oneself."
+    ],
+    "ai_summary": "This plan includes a combination of guided visualization for relaxation, gratitude journaling to foster positivity, and mindful breathing to manage stress during work-related interactions. Together, these activities aim to create a comprehensive approach to reducing stress in your corporate environment.",
+    "confidence": 0.78,
+    "confidence_note": "The plan is tailored specifically for workplace stress management and incorporates activities proven effective in such settings.",
+    "saved_at": 1764549215
   }
 ]

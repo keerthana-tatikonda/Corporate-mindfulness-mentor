@@ -220,6 +220,65 @@ def create_llm_break_graph():
     return graph.compile()
 
 def run_llm_break_workflow():
-    """Run the compiled LLM workflow and return final results."""
+    """Run the compiled LLM workflow and return final results with confidence.
+
+    Returns a dict like:
+    {
+        "message": "...",              # brief break reminder
+        "reflection": "...",           # why this matters
+        "recommendation": "...",       # concrete activity
+        "confidence": 0.0-1.0,         # heuristic confidence
+        "confidence_note": "..."       # plain-language explanation
+    }
+    """
     compiled = create_llm_break_graph()
-    return compiled.invoke({})
+    raw = compiled.invoke({}) or {}
+
+    # --- Heuristic confidence so we can show a bar in the UI ---
+    def _heuristic_conf_break(out: dict) -> tuple[float, str]:
+        msg_len = len((out.get("message") or "").split())
+        refl_len = len((out.get("reflection") or "").split())
+        rec_len = len((out.get("recommendation") or "").split())
+
+        # Simple scoring: more complete explanations -> higher confidence
+        score = 0.35
+        if msg_len >= 4:
+            score += 0.15
+        if refl_len >= 20:
+            score += 0.25
+        if rec_len >= 12:
+            score += 0.15
+
+        # clamp to [0, 1]
+        score = max(0.0, min(1.0, score))
+
+        if score >= 0.8:
+            note = (
+                "High confidence: the reminder, explanation, and activity are all "
+                "well-formed and consistent with standard short-break guidance."
+            )
+        elif score >= 0.5:
+            note = (
+                "Moderate confidence: this looks like a reasonable suggestion, "
+                "but feel free to adapt or ignore it."
+            )
+        else:
+            note = (
+                "Lower confidence: treat this as a light suggestion rather than "
+                "a strong recommendation."
+            )
+
+        return score, note
+
+    conf, note = _heuristic_conf_break(raw if isinstance(raw, dict) else {})
+
+    if not isinstance(raw, dict):
+        raw = {}
+
+    raw.setdefault("message", "")
+    raw.setdefault("reflection", "")
+    raw.setdefault("recommendation", "")
+    raw["confidence"] = conf
+    raw["confidence_note"] = note
+    return raw
+
