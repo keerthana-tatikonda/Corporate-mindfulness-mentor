@@ -28,11 +28,36 @@ from services.llm import client, MODEL
 from pydantic import ValidationError
 import logging
 
-CHECKIN_SYS_PROMPT = (
-    "You are a wellness check-in coach. Provide a micro-plan based on mood, "
-    "sleep quality, energy level, and workload. Output JSON with 'plan' and "
-    "'summary'. Keep activities short, safe, and workplace friendly."
-)
+def get_checkin_system_prompt(autonomy_level: str) -> str:
+    """Get check-in system prompt adapted to autonomy level."""
+    base = (
+        "You are a wellness check-in coach. Provide a micro-plan based on mood, "
+        "sleep quality, energy level, and workload. Output JSON with 'plan' and "
+        "'summary'. Keep activities short, safe, and workplace friendly."
+    )
+    
+    if autonomy_level == "Passive Observer":
+        base += (
+            "\n\nAUTONOMY: Offer observations about the user's state without prescribing actions. "
+            "Example: 'Your energy is low today. Options include: gentle movement, short rest, or breathing.'"
+        )
+    elif autonomy_level == "Gentle Suggester":
+        base += (
+            "\n\nAUTONOMY: Suggest activities gently. "
+            "Example: 'Consider a 5-minute breathing exercise before your first meeting.'"
+        )
+    elif autonomy_level == "Active Coach":
+        base += (
+            "\n\nAUTONOMY: Give clear recommendations. "
+            "Example: 'I recommend taking a 10-minute walk and a breathing break before meetings.'"
+        )
+    else:  # Directive Guide
+        base += (
+            "\n\nAUTONOMY: Provide specific instructions. "
+            "Example: 'Do this: 5-minute box breathing at 9am, 10-minute walk at noon, 3-minute stretch at 3pm.'"
+        )
+    
+    return base
 
 log = logging.getLogger(__name__)
 
@@ -1378,6 +1403,54 @@ def morning_checkin_node(state: Dict[str, Any]) -> Dict[str, Any]:
     ck = state.get("checkin")
     if not ck:
         return state  # nothing to do
+    #get autonomy level
+    autonomy_level = state.get("autonomy_level", "Gentle Suggester")
+    # Use adapted system prompt
+    coach_mode = state.get("coach_mode", "gentle")
+    system_prompt = get_checkin_system_prompt(autonomy_level)
+    
+
+    mode_instructions = {
+        "passive": (
+            "Use a very low-autonomy style. Focus on acknowledging feelings and "
+            "light reflection. Offer at most one optional suggestion and avoid "
+            "telling the user what they *should* do."
+        ),
+        "gentle": (
+            "Use a gentle, collaborative style. Offer a small number of suggestions "
+            "framed as options the user can accept or ignore."
+        ),
+        "active": (
+            "Use an active coaching style. Provide a clear, concrete plan with "
+            "several specific steps, while staying respectful."
+        ),
+        "directive": (
+            "Use a directive, structured style. Provide a very specific plan with "
+            "prioritized steps and timeboxing, but still be supportive and not harsh."
+        ),
+    }
+    style_text = mode_instructions.get(coach_mode, mode_instructions["gentle"])
+
+    user_prompt = f"""
+    You are an AI wellness coach helping the user plan their day.
+
+    Current coaching style: {coach_mode!r}.
+    Style instructions: {style_text}
+
+    User check-in:
+    - Mood: {ck.get('mood')}
+    - Sleep: {ck.get('sleep_quality')}
+    - Energy: {ck.get('energy')}
+    - Workload: {ck.get('workload')}
+    - Notes: {ck.get('notes')}
+
+    Generate:
+    - A short summary of today's situation.
+    - A plan 'focus_for_today' as a list of bullet points.
+    - Optional risk_flags if there is potential burnout / fatigue, etc.
+    - A confidence score 0–1 for how appropriate this plan is.
+    - A short confidence_note explaining why the confidence is that high/low.
+    """
 
     # If API key is missing, return personalized rule-based fallback
     if not os.environ.get("OPENAI_API_KEY"):
@@ -1466,7 +1539,7 @@ def morning_checkin_node(state: Dict[str, Any]) -> Dict[str, Any]:
         resp = client.chat.completions.create(
             model=MODEL,
             messages=[
-                {"role": "system", "content": CHECKIN_SYS_PROMPT},
+                {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
             ],
             response_format={"type": "json_object"},

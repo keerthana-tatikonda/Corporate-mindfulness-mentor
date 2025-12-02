@@ -54,6 +54,19 @@ except Exception:
     save_profile = None
     load_profile = lambda *args, **kwargs: None
 
+
+
+# ──────────────────────────────────────────────────────────────
+# 🌐 Global AI Coaching Style Labels (Used Across All Stories)
+# ──────────────────────────────────────────────────────────────
+MODE_LABELS = {
+    "passive": "Passive Observer – mostly reflective, very low autonomy.",
+    "gentle": "Gentle Suggester – soft, optional suggestions (default).",
+    "active": "Active Coach – concrete action steps, medium autonomy.",
+    "directive": "Directive Guide – very structured plan, higher autonomy.",
+}
+
+
 # ──────────────────────────────────────────────────────────────
 # Helper: AI confidence chip
 # ──────────────────────────────────────────────────────────────
@@ -79,6 +92,49 @@ def render_confidence(provenance: str | None, confidence: float | None, key: str
         unsafe_allow_html=True,
     )
     st.progress(pct, text="Model confidence")
+
+def get_autonomy_system_prompt(base_prompt: str) -> str:
+    """
+    Modify system prompt based on user's selected autonomy level.
+    
+    Args:
+        base_prompt: The original system prompt
+        
+    Returns:
+        Modified prompt that reflects the user's autonomy preference
+    """
+    autonomy_level = st.session_state.get("autonomy_level", "Gentle Suggester")
+    
+    if autonomy_level == "Passive Observer":
+        modifier = (
+            "\n\nAUTONOMY SETTING: The user prefers minimal AI direction. "
+            "Provide observations and options WITHOUT strong recommendations. "
+            "Use phrases like 'you might consider', 'one option could be', 'some people find'. "
+            "Never use imperative language. Let the user decide everything."
+        )
+    elif autonomy_level == "Gentle Suggester":
+        modifier = (
+            "\n\nAUTONOMY SETTING: The user prefers collaborative suggestions. "
+            "Offer gentle recommendations while emphasizing user choice. "
+            "Use phrases like 'I suggest', 'you could try', 'this might help'. "
+            "Frame everything as suggestions they can accept or decline."
+        )
+    elif autonomy_level == "Active Coach":
+        modifier = (
+            "\n\nAUTONOMY SETTING: The user wants active coaching. "
+            "Provide clear, confident recommendations with rationale. "
+            "Use phrases like 'I recommend', 'you should', 'the best approach is'. "
+            "Be directive but explain why each recommendation matters."
+        )
+    else:  # Directive Guide
+        modifier = (
+            "\n\nAUTONOMY SETTING: The user wants prescriptive guidance. "
+            "Give specific, actionable instructions based on best practices. "
+            "Use phrases like 'do this', 'start with', 'the most effective approach is'. "
+            "Be confident and direct—tell them exactly what to do and when."
+        )
+    
+    return base_prompt + modifier
 
 
 def render_uncertainty(confidence: float | None, key: str, show_explanation: bool = True):
@@ -971,14 +1027,32 @@ if dec:
         st.markdown("### 🌱 Why This Sequence?")
         st.info(dec.ai_summary)
 
-    render_confidence(
-        provenance=None,
-        confidence=getattr(dec, "confidence", None),
-        key="decomposition_conf",
-    )
+# ✅ ADDITION: Show both confidence and uncertainty
+    dec_conf = getattr(dec, "confidence", None)
+    cols = st.columns(2)
+    with cols[0]:
+        render_confidence(None, dec_conf, key="decomposition_conf")
+    with cols[1]:
+        render_uncertainty(dec_conf, key="decomposition_uncertainty", show_explanation=False)
+    
     note = getattr(dec, "confidence_note", None)
     if note:
-        st.caption(f"Confidence note: {note}")
+        st.caption(f"📊 {note}")
+    
+    # ✅ ADDITION: Explainability for decomposition
+    reasoning_steps = [
+        {
+            "title": "Milestone Planning",
+            "description": f"Broke your goal into {len(dec.subgoals)} progressive milestones",
+            "confidence": dec_conf if dec_conf else 0.8
+        },
+        {
+            "title": "Activity Distribution",
+            "description": "Assigned specific activities to each timeframe based on skill progression",
+            "confidence": dec_conf if dec_conf else 0.75
+        }
+    ]
+    render_explainability_view(reasoning_steps, key="decomposition_reasoning")
 
 # ──────────────────────────────────────────────────────────────
 # Display Main Plan (Activities & Summary)
@@ -989,10 +1063,39 @@ if result:
     st.markdown("---")
 
     st.markdown(f"## 🎯 Your Goal: {result.goal}")
-    render_confidence(None, getattr(result, "confidence", None), key="plan_conf")
+    
+    # ✅ ADDITION: Show both confidence and uncertainty side by side
+    confidence_val = getattr(result, "confidence", None)
+    cols = st.columns(2)
+    with cols[0]:
+        render_confidence(None, confidence_val, key="plan_conf")
+    with cols[1]:
+        render_uncertainty(confidence_val, key="plan_uncertainty", show_explanation=False)
+    
     plan_conf_note = getattr(result, "confidence_note", None)
     if plan_conf_note:
-        st.caption(f"Confidence note: {plan_conf_note}")
+        st.caption(f"📊 {plan_conf_note}")
+    
+    # ✅ ADDITION: Explainability view showing reasoning
+    num_activities = len(result.suggested_activities)
+    reasoning_steps = [
+        {
+            "title": "Goal Analysis",
+            "description": f"Analyzed your goal '{result.goal}' and context to identify focus areas",
+            "confidence": 0.9
+        },
+        {
+            "title": "Activity Selection",
+            "description": f"Selected {num_activities} evidence-based activities matching your needs",
+            "confidence": confidence_val if confidence_val else 0.8
+        },
+        {
+            "title": "Personalization",
+            "description": "Tailored recommendations to fit corporate work environment",
+            "confidence": confidence_val if confidence_val else 0.75
+        }
+    ]
+    render_explainability_view(reasoning_steps, key="goal_creation_reasoning")
 
     current_id = st.session_state.get("current_goal_id")
     if current_id and current_id in st.session_state["saved_plans"]:
@@ -1183,14 +1286,45 @@ if personalize_submit:
             st.markdown("### 📝 Why this fits you")
             st.info(p.summary)
             st.session_state["personalized"] = p
-            render_confidence(
-                None,
-                getattr(p, "confidence", None),
-                key="profile_conf",
-            )
+        # ✅ ADDITION: Show both confidence and uncertainty
+            p_conf = getattr(p, "confidence", None)
+            cols = st.columns(2)
+            with cols[0]:
+                render_confidence(None, p_conf, key="profile_conf")
+            with cols[1]:
+                render_uncertainty(p_conf, key="profile_uncertainty", show_explanation=False)
+            
             note = getattr(p, "confidence_note", None)
             if note:
-                st.caption(f"Confidence note: {note}")
+                st.caption(f"📊 {note}")
+            
+            # ✅ ADDITION: Explainability for personalization
+            reasoning_steps = [
+                {
+                    "title": "Schedule Analysis",
+                    "description": f"Analyzed your work schedule: {profile.work_schedule}",
+                    "confidence": 0.95
+                },
+                {
+                    "title": "Preference Matching",
+                    "description": f"Incorporated {len(profile.preferences or [])} preferences and {len(profile.constraints or [])} constraints",
+                    "confidence": 0.9
+                },
+                {
+                    "title": "Timing Optimization",
+                    "description": f"Scheduled activities around stress level {profile.typical_stress_level}/10",
+                    "confidence": p_conf if p_conf else 0.8
+                }
+            ]
+            render_explainability_view(reasoning_steps, key="personalization_reasoning")
+            
+            # ✅ ADDITION: Trust caption
+            st.markdown("#### 🔒 Trust and Predictability by Design")
+            st.caption(
+                "Personalization uses your work schedule, stress level, preferences, and constraints. "
+                "Activities are timed to fit your actual availability. Higher confidence means better "
+                "alignment with your profile."
+            )
         except Exception as e:
             st.error(f"Could not personalize plan: {e}")
 
@@ -1274,14 +1408,45 @@ if adapt_submit:
                 st.markdown(f"{i}. {a}")
             st.markdown("### 💡 Rationale")
             st.caption(adapted.rationale)
-            render_confidence(
-                provenance=None,
-                confidence=getattr(adapted, "confidence", None),
-                key="adapt_conf",
-            )
+           # ✅ ADDITION: Show both confidence and uncertainty
+            adapt_conf = getattr(adapted, "confidence", None)
+            cols = st.columns(2)
+            with cols[0]:
+                render_confidence(None, adapt_conf, key="adapt_conf")
+            with cols[1]:
+                render_uncertainty(adapt_conf, key="adapt_uncertainty", show_explanation=False)
+            
             note = getattr(adapted, "confidence_note", None)
             if note:
-                st.caption(f"Confidence note: {note}")
+                st.caption(f"📊 {note}")
+            
+            # ✅ ADDITION: Explainability for adaptation
+            reasoning_steps = [
+                {
+                    "title": "Workload Assessment",
+                    "description": f"Today: {wl.meetings} meetings, {wl.busy_hours} busy hours, fatigue: {wl.fatigue or 'not reported'}",
+                    "confidence": 0.95
+                },
+                {
+                    "title": "Activity Scaling",
+                    "description": f"Reduced plan to {len(adapted.day_plan)} manageable micro-tasks",
+                    "confidence": 0.9
+                },
+                {
+                    "title": "Timing Adjustment",
+                    "description": "Scheduled activities during lower-demand periods today",
+                    "confidence": adapt_conf if adapt_conf else 0.8
+                }
+            ]
+            render_explainability_view(reasoning_steps, key="adaptation_reasoning")
+            
+            # ✅ ADDITION: Trust caption
+            st.markdown("#### 🔒 Trust and Predictability by Design")
+            st.caption(
+                "Workload adaptation uses today's meeting count, busy hours, and fatigue level "
+                "to right-size your plan. When workload is heavy, fewer activities are suggested. "
+                "Lower confidence suggests unusual workload patterns."
+            )
         except Exception as e:
             st.error(f"Could not adapt today’s plan: {e}")
 
@@ -1310,13 +1475,47 @@ if st.button("🤖 AI-Powered Mindful Break"):
         st.success(llm_output["recommendation"])
 
     # 🔍 Confidence bar (interaction design: visual cue)
-    render_confidence(
-        provenance=None,
-        confidence=llm_output.get("confidence"),
-        key="break_confidence",
-    )
+# ✅ ADDITION: Show both confidence and uncertainty
+    break_conf = llm_output.get("confidence")
+    cols = st.columns(2)
+    with cols[0]:
+        render_confidence(None, break_conf, key="break_confidence")
+    with cols[1]:
+        render_uncertainty(break_conf, key="break_uncertainty", show_explanation=False)
+    
     if llm_output.get("confidence_note"):
-        st.caption(llm_output["confidence_note"])
+        st.caption(f"📊 {llm_output['confidence_note']}")
+    
+    # ✅ ADDITION: Explainability view
+    reasoning_steps = [
+        {
+            "title": "Break Reminder Selection",
+            "description": "Chose a brief mindfulness prompt from evidence-based techniques",
+            "confidence": 0.9
+        },
+        {
+            "title": "Benefit Reflection",
+            "description": "Explained why this type of break supports mental health and focus",
+            "confidence": break_conf if break_conf else 0.8
+        },
+        {
+            "title": "Activity Recommendation",
+            "description": "Suggested a concrete 2-5 minute action you can take right now",
+            "confidence": break_conf if break_conf else 0.75
+        }
+    ]
+    render_explainability_view(reasoning_steps, key="break_reasoning")
+    
+    # ✅ ADDITION: Trust caption
+    st.markdown("### 🔒 Trust and Predictability by Design")
+    st.write(
+        "Mindful break suggestions are generated using a three-step reasoning "
+        "flow (reminder → reflection → recommendation). The confidence bar above "
+        "shows how reliable the mentor believes today's suggestion is. "
+        "When confidence is lower, treat the suggestion as a gentle nudge rather "
+        "than a strong instruction—you stay fully in control of when and how "
+        "you take breaks."
+    )
 
     # 🧠 Explainability View — why this break?
     with st.expander("Why this break? (Explainability view)"):
@@ -1450,10 +1649,21 @@ if do_checkin:
         notes=notes or None,
     )
 
-    # 🔄 Run the graph / LLM with a small spinner
+    # ✅ ADDITION: Get autonomy level and map to coach_mode
     with st.spinner("Adjusting your plan for today…"):
         try:
-            adj = run_morning_checkin(ck)
+            autonomy_level = st.session_state.get("autonomy_level", "Gentle Suggester")
+            
+            # Map UI label to mode string
+            mode_map = {
+                "Passive Observer": "passive",
+                "Gentle Suggester": "gentle",
+                "Active Coach": "active",
+                "Directive Guide": "directive"
+            }
+            coach_mode = mode_map.get(autonomy_level, "gentle")
+            
+            adj = run_morning_checkin(ck, coach_mode=coach_mode)
         except Exception as e:
             st.error(f"Could not adjust based on check-in: {e}")
             adj = None
@@ -1482,15 +1692,63 @@ if do_checkin:
         if getattr(adj, "risk_flags", None):
             st.caption("Flags: " + ", ".join(adj.risk_flags))
 
-        # 🔵 Confidence bar (visual cue for uncertainty)
-        render_confidence(
-            provenance=None,
-            confidence=getattr(adj, "confidence", None),
-            key="checkin_conf",
-        )
+# ✅ ADDITION: Show both confidence and uncertainty
+        checkin_conf = getattr(adj, "confidence", None)
+        cols = st.columns(2)
+        with cols[0]:
+            render_confidence(None, checkin_conf, key="checkin_conf")
+        with cols[1]:
+            render_uncertainty(checkin_conf, key="checkin_uncertainty", show_explanation=False)
+        
         note = getattr(adj, "confidence_note", None)
         if note:
-            st.caption(f"Confidence note: {note}")
+            st.caption(f"📊 {note}")
+        
+        # ✅ ADDITION: Show which coaching mode was used
+        st.caption(
+            f"**AI coaching style:** {autonomy_level} "
+            "(change this anytime from the sidebar)."
+        )
+        
+        # ✅ ADDITION: Explainability view
+        with st.expander("🔍 Why these suggestions? (Explainability view)"):
+            st.markdown(f"""
+**Your inputs:**
+- Mood: **{mood or '—'}**
+- Sleep quality: **{sleep or '—'}**
+- Energy: **{energy or '—'}**
+- Workload: **{workload or '—'}**
+            """)
+            if notes:
+                st.markdown(f"- Notes: _{notes}_")
+            
+            if getattr(adj, "risk_flags", None):
+                st.markdown("**Risk flags detected:** " + ", ".join(adj.risk_flags))
+            
+            st.caption(
+                "This view shows which signals influenced today's micro-plan. "
+                "You stay in control—feel free to ignore or modify any suggestion."
+            )
+        
+        # ✅ ADDITION: Trust caption
+        st.markdown("#### 🔒 Trust and Predictability by Design")
+        st.caption(
+            "The Morning Wellness Check-In uses only the mood, sleep, energy, workload, "
+            "and notes you provide above. The confidence bar reflects how reliable the "
+            "mentor believes today's suggestions are; when confidence is lower, treat "
+            "the plan as a gentle suggestion rather than a prescription."
+        )
+        mode_labels = {
+        "passive": "Passive Observer – mostly reflective, very low autonomy.",
+        "gentle": "Gentle Suggester – soft, optional suggestions (default).",
+        "active": "Active Coach – concrete action steps, medium autonomy.",
+        "directive": "Directive Guide – very structured plan, higher autonomy.",
+        }
+
+        st.caption(
+        f"**AI coaching style:** {mode_labels.get(coach_mode, coach_mode)} "
+        "(change this anytime from the sidebar)."
+        )
 
         # 🔍 Explainability View – why these suggestions?
         with st.expander("🔍 Why these suggestions? (Explainability view)"):
@@ -1514,16 +1772,6 @@ if do_checkin:
                 "This view shows which signals influenced today's micro-plan. "
                 "You stay in control — feel free to ignore or modify any suggestion."
             )
-st.markdown("#### 🔐 Trust and Predictability by Design")
-st.caption(
-    "The Morning Wellness Check-In uses only the mood, sleep, energy, workload, "
-    "and notes you provide above. The confidence bar reflects how reliable the "
-    "mentor believes today’s suggestions are; when confidence is lower, treat "
-    "the plan as a gentle suggestion rather than a prescription."
-)
-
-
-
 
 
 
@@ -1540,6 +1788,19 @@ st.markdown("### 🧭 Personalize Your Session")
 user_goal = st.text_input("Describe your current state or need:", "")
 stress_level = st.slider("Stress Level", 0, 10, 0)
 
+# 🔧 Autonomy control for this user story
+autonomy_mode = st.radio(
+    "Mentor autonomy level",
+    ["Passive (show more options)", "Balanced guidance", "Directive (strong recommendation)"],
+    index=1,
+    horizontal=True,
+    help=(
+        "Passive: more options, you choose.\n"
+        "Balanced: a small curated set.\n"
+        "Directive: the mentor leans in and suggests one clear path."
+    ),
+)
+
 if user_goal.strip() == "":
     st.warning("Please describe your current state or need before continuing.")
 else:
@@ -1551,6 +1812,8 @@ else:
                 profile={
                     "context": "corporate",
                     "session_type": "guided_practice",
+                    # NEW: autonomy mode passed into the graph/LLM
+                    "autonomy_mode": autonomy_mode,
                 },
                 history=st.session_state.get("session_history", []),
             )
@@ -1581,11 +1844,65 @@ else:
                 st.markdown(
                     f"---\n**Reflection:** {st.session_state['summary']}"
                 )
+
+                # ─────────────────────────────────────────────
+                # ✅ Uncertainty / Confidence visualization
+                # ─────────────────────────────────────────────
+                guided_conf = result.get("confidence")
+                guided_conf_note = result.get("confidence_note")
+
+                render_confidence(
+                    provenance=None,
+                    confidence=guided_conf,
+                    key="guided_techniques_conf",
+                )
+                if guided_conf_note:
+                    st.caption(f"Confidence note: {guided_conf_note}")
+
+                # ─────────────────────────────────────────────
+                # 🔍 Explainability View
+                # ─────────────────────────────────────────────
+                with st.expander("🔍 Why did the mentor pick these techniques?"):
+                    explanation = (
+                        result.get("explanation")
+                        or result.get("reasoning")
+                        or ""
+                    )
+                    if explanation:
+                        st.write(explanation)
+                    else:
+                        # Safe fallback explanation if graph doesn’t return one
+                        st.write(
+                            f"These techniques were selected to match your goal "
+                            f"('{user_goal}') and stress level ({stress_level}/10) "
+                            f"under **{autonomy_mode}**."
+                        )
+                    st.caption(
+                        "This view summarizes the mentor's internal reasoning so the "
+                        "selection feels transparent instead of mysterious."
+                    )
+
+                # ─────────────────────────────────────────────
+                # 🔒 Trust & Predictability by Design
+                # ─────────────────────────────────────────────
+                st.markdown("#### 🔒 Trust & Predictability by Design")
+                st.info(
+                    "• Your **stress level** influences how intense or gentle the practices are.\n"
+                    "• Your **text description** shapes the focus (anxiety, focus, sleep, etc.).\n"
+                    "• **Autonomy level** controls how strongly the mentor steers you:\n"
+                    "  - Passive → more options, you stay in full control.\n"
+                    "  - Balanced → a small, curated set.\n"
+                    "  - Directive → one main path is highlighted.\n"
+                    "These rules make the mentor’s behavior consistent and easier to predict."
+                )
+
             else:
                 st.warning(
                     "⚠️ No AI-generated techniques received. "
                     "Try again or check your API key."
                 )
+
+
 
 
 
@@ -1864,14 +2181,51 @@ else:
                 st.markdown(f"• {suggestion}")
         
         # 🎯 Display confidence
-        render_confidence(
-            provenance=None,
-            confidence=analytics_dict.get("confidence"),
-            key="stress_analytics_conf",
-        )
+# ✅ ADDITION: Show both confidence and uncertainty
+        stress_conf = analytics_dict.get("confidence")
+        cols = st.columns(2)
+        with cols[0]:
+            render_confidence(None, stress_conf, key="stress_analytics_conf")
+        with cols[1]:
+            render_uncertainty(stress_conf, key="stress_analytics_uncertainty", show_explanation=False)
+        
         conf_note = analytics_dict.get("confidence_note")
         if conf_note:
-            st.caption(f"📊 Confidence note: {conf_note}")
+            st.caption(f"📊 {conf_note}")
+        
+        # ✅ ADDITION: Explainability view
+        num_days = len(all_checkins)
+        reasoning_steps = [
+            {
+                "title": "Data Collection",
+                "description": f"Analyzed {num_days} check-ins to identify patterns",
+                "confidence": 0.95
+            },
+            {
+                "title": "Pattern Recognition",
+                "description": "Identified stress triggers and timing patterns from mood, sleep, energy, and workload data",
+                "confidence": stress_conf if stress_conf else 0.8
+            },
+            {
+                "title": "Driver Analysis",
+                "description": f"Extracted {len(analytics_dict.get('key_drivers', []))} main stress drivers",
+                "confidence": stress_conf if stress_conf else 0.75
+            },
+            {
+                "title": "Recommendation Generation",
+                "description": f"Generated {len(analytics_dict.get('suggestions', []))} personalized suggestions",
+                "confidence": stress_conf if stress_conf else 0.7
+            }
+        ]
+        render_explainability_view(reasoning_steps, key="stress_analytics_reasoning")
+        
+        # ✅ ADDITION: Trust caption
+        st.markdown("#### 🔒 Trust and Predictability by Design")
+        st.caption(
+            f"Stress analytics analyzes {num_days} days of your morning check-ins. "
+            "It identifies patterns in mood, sleep, energy, and workload to find stress triggers. "
+            "More days of data = higher confidence. Treat low-confidence insights as preliminary observations."
+        )
         
         # Store in session state so it persists after button click
         st.session_state["last_stress_analysis"] = analytics_dict
@@ -2162,15 +2516,51 @@ else:
                 for suggestion in suggestions:
                     st.markdown(f"• {suggestion}")
             
-            # 🎯 Display confidence
-            render_confidence(
-                provenance=None,
-                confidence=insights_dict.get("confidence"),
-                key="productivity_insights_conf",
-            )
+      # ✅ ADDITION: Show both confidence and uncertainty
+            prod_conf = insights_dict.get("confidence")
+            cols = st.columns(2)
+            with cols[0]:
+                render_confidence(None, prod_conf, key="productivity_insights_conf")
+            with cols[1]:
+                render_uncertainty(prod_conf, key="productivity_insights_uncertainty", show_explanation=False)
+            
             conf_note = insights_dict.get("confidence_note")
             if conf_note:
-                st.caption(f"📊 Confidence note: {conf_note}")
+                st.caption(f"📊 {conf_note}")
+            
+            # ✅ ADDITION: Explainability view
+            num_overlapping = len(merged)
+            reasoning_steps = [
+                {
+                    "title": "Data Alignment",
+                    "description": f"Matched {num_overlapping} days where both stress and productivity were logged",
+                    "confidence": 0.95
+                },
+                {
+                    "title": "Correlation Analysis",
+                    "description": f"Calculated relationship between stress levels and productivity scores (correlation: {correlation:.2f})",
+                    "confidence": 0.9 if num_overlapping >= 7 else 0.6
+                },
+                {
+                    "title": "Risk Pattern Detection",
+                    "description": f"Identified {len(insights_dict.get('risk_windows', []))} high-risk patterns where stress impacts performance",
+                    "confidence": prod_conf if prod_conf else 0.75
+                },
+                {
+                    "title": "Actionable Recommendations",
+                    "description": f"Generated {len(insights_dict.get('suggestions', []))} strategies to protect productivity",
+                    "confidence": prod_conf if prod_conf else 0.7
+                }
+            ]
+            render_explainability_view(reasoning_steps, key="productivity_insights_reasoning")
+            
+            # ✅ ADDITION: Trust caption
+            st.markdown("#### 🔒 Trust and Predictability by Design")
+            st.caption(
+                f"Productivity insights compare {num_overlapping} days where you logged both stress check-ins "
+                "and productivity scores. The correlation analysis shows how they relate. "
+                "Need 7+ overlapping days for reliable patterns. Lower confidence = treat as exploratory insights."
+            )
             
             # Store in session state
             st.session_state["last_productivity_analysis"] = insights_dict
@@ -2468,6 +2858,14 @@ if analyze_week and reflection_text.strip():
             ]
             render_explainability_view(reasoning_steps, key="weekly_reflection_reasoning")
 
+             # ✅ ADDITION: Trust caption
+            st.markdown("#### 🔒 Trust and Predictability by Design")
+            st.caption(
+                "Weekly reflection analysis uses your written reflection plus up to 3 recent weeks "
+                "to identify patterns. The AI looks for stress triggers, accomplishments, and growth areas. "
+                "More weeks logged = better trend detection. Low confidence = treat as preliminary insights."
+            )
+
             # Feedback widgets
             st.markdown("---")
             render_feedback_widget(
@@ -2509,6 +2907,12 @@ if existing_entries:
 # ──────────────────────────────────────────────────────────────
 st.markdown("---")
 st.markdown("## 💬 AI Coaching & Support — Mentor Conversations")
+# ✅ ADDITION: Trust caption explaining mentor behavior
+st.caption(
+    "💡 **How the mentor works:** The AI provides calm, evidence-based responses to your stress concerns. "
+    "Confidence scores show how certain the mentor is about its advice. This is for general wellness support, "
+    "not clinical treatment. For severe anxiety or depression, please contact a mental health professional."
+)
 
 # Keep mentor conversation history in session_state
 if "mentor_history" not in st.session_state:
@@ -2520,14 +2924,17 @@ for idx, h in enumerate(st.session_state["mentor_history"]):
     st.chat_message("assistant").markdown(h.get("assistant", ""))
 
     # show confidence per turn if present
+# ✅ ADDITION: Show both confidence and uncertainty per turn
     if "confidence" in h:
-        render_confidence(
-            provenance=None,
-            confidence=h.get("confidence"),
-            key=f"mentor_conf_{idx}",
-        )
+        mentor_conf = h.get("confidence")
+        cols = st.columns(2)
+        with cols[0]:
+            render_confidence(None, mentor_conf, key=f"mentor_conf_{idx}")
+        with cols[1]:
+            render_uncertainty(mentor_conf, key=f"mentor_uncertainty_{idx}", show_explanation=False)
+        
         if h.get("confidence_note"):
-            st.caption(h["confidence_note"])
+            st.caption(f"📊 {h['confidence_note']}")
 
 # 2) Input form directly under the heading
 with st.form("mentor_form", clear_on_submit=True):
@@ -2649,6 +3056,14 @@ else:
         ]
         render_explainability_view(reasoning_steps, key="motivation_reasoning")
 
+                # ✅ ADDITION: Trust caption
+        st.markdown("#### 🔒 Trust and Predictability by Design")
+        st.caption(
+            f"Motivational messages are based on your task completion rate ({done}/{total} completed). "
+            "Higher completion rates get stronger encouragement. The confidence score reflects how well "
+            "your pattern matches typical wellness journeys. This is purely supportive—you control your pace."
+        )
+
         # Feedback widgets
         st.markdown("---")
         render_feedback_widget(
@@ -2704,8 +3119,8 @@ else:
             )
             .properties(height=240)
         )
-        # Streamlit: replace use_container_width with width="stretch"
-        st.altair_chart(weekly_chart, width="stretch")
+        
+        st.altair_chart(weekly_chart, use_container_width=True)
 
         # Stress distribution
         st.markdown("### 📈 Stress Level Distribution in the Workforce")
@@ -2735,7 +3150,7 @@ else:
             .properties(height=240)
         )
 
-        st.altair_chart(dist_chart, width="stretch")
+        st.altair_chart(dist_chart, use_container_width=True)
 
         # AI-generated HR summary (via LangGraph)
         st.markdown("### 🤖 AI Insight for HR Leaders")

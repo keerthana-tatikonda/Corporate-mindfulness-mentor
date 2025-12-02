@@ -165,60 +165,171 @@ def run_mentor_cycle(user_goal: str, stress_level: int, profile: dict, history: 
     """
     Generates unique mindfulness or breathing techniques dynamically using OpenAI.
     Always returns a Python dictionary (not raw string).
+
+    Now also returns:
+      - confidence: float 0..1 (how appropriate the mentor thinks this set is)
+      - confidence_note: short explanation of that confidence
+      - explanation: short reasoning about why these techniques were chosen
     """
+
+    # --- Autonomy handling -------------------------------------------------
+    autonomy_mode = profile.get("autonomy_mode", "Balanced guidance")
+    # Normalize for the prompt
+    if "Passive" in autonomy_mode:
+        autonomy_instruction = (
+            "Autonomy mode: PASSIVE — offer 3 distinct options and let the user choose. "
+            "Use softer language and avoid sounding prescriptive."
+        )
+        target_min, target_max = 3, 3
+    elif "Directive" in autonomy_mode:
+        autonomy_instruction = (
+            "Autonomy mode: DIRECTIVE — focus on 1–2 strong recommendations and clearly "
+            "highlight what the user should start with first."
+        )
+        target_min, target_max = 1, 2
+    else:
+        # Balanced
+        autonomy_instruction = (
+            "Autonomy mode: BALANCED — suggest 2–3 options, gently steering the user "
+            "toward one or two primary techniques."
+        )
+        target_min, target_max = 2, 3
+
+    # Keep history compact for the model (optional, improves continuity)
+    short_history = []
+    try:
+        for h in (history or [])[-3:]:
+            # expect items like {"user": "...", "assistant": "..."} if present
+            short_history.append(
+                {
+                    "user": h.get("user"),
+                    "assistant": h.get("assistant"),
+                }
+            )
+    except Exception:
+        short_history = []
 
     llm = ChatOpenAI(model="gpt-4o-mini", temperature=1.0, top_p=0.9)
 
     prompt = f"""
-    You are an AI mindfulness mentor helping a corporate employee manage stress and improve focus.
+You are an AI mindfulness mentor helping a corporate employee manage stress and improve focus.
 
-    Generate 2–3 *unique and diverse* mindfulness or breathing techniques based on the following:
+User Goal: {user_goal}
+Stress Level: {stress_level}/10
+Profile Details: {profile}
+Recent Session History (optional, may be empty): {short_history}
 
-    User Goal: {user_goal}
-    Stress Level: {stress_level}/10
-    Profile Details: {profile}
+{autonomy_instruction}
 
-    Guidelines:
-    - Make the techniques contextually relevant to the user's goal and stress level.
-    - Each run should offer different creative variations — avoid repeating the same names or steps.
-    - If the user goal includes emotional words (e.g., "anxious", "tired", "angry"), personalize the tone and purpose accordingly.
-    - Include a short motivational comment or reflection in each technique that connects to their goal (e.g., "Since you mentioned {user_goal.lower()}, try...").
+Generate between {target_min} and {target_max} *unique and diverse* mindfulness or breathing techniques.
 
-    Return only valid JSON with this format:
+Guidelines:
+- Make the techniques contextually relevant to the user's goal and stress level.
+- Each run should offer different creative variations — avoid repeating the same names or steps.
+- If the user goal includes emotional words (e.g., "anxious", "tired", "angry"), personalize the tone and purpose accordingly.
+- Include a short motivational comment or reflection in each technique that connects to their goal (e.g., "Since you mentioned {user_goal.lower()}, try...").
+
+Return ONLY valid JSON with this format:
+{{
+  "techniques": [
     {{
-      "techniques": [
-        {{
-          "title": "string",
-          "duration_min": int,
-          "description": "string",
-          "steps": ["step1", "step2", "step3"],
-          "motivation": "string"
-        }}
-      ],
-      "summary": "brief personalized reflection message summarizing the overall mindfulness advice"
+      "title": "string",
+      "duration_min": int,
+      "description": "string",
+      "steps": ["step1", "step2", "step3"],
+      "motivation": "string"
     }}
-    """
+  ],
+  "summary": "brief personalized reflection message summarizing the overall mindfulness advice",
+  "confidence": 0.0_to_1.0_float_if_you_can_estimate,
+  "confidence_note": "short reason for your confidence level",
+  "explanation": "2–4 sentences explaining why these techniques were chosen given the goal, stress level, and autonomy mode"
+}}
+"""
 
     try:
         response = llm.invoke(prompt)
-        text = response.content.strip()
+        text = (response.content or "").strip()
 
-        # Extract and parse JSON safely
+        # Extract JSON payload robustly
         start_idx = text.find("{")
-        end_idx = text.rfind("}") + 1
-        json_text = text[start_idx:end_idx]
+        end_idx = text.rfind("}")
+        if start_idx == -1 or end_idx == -1:
+            raise ValueError("No JSON object found in LLM response.")
+        json_text = text[start_idx : end_idx + 1]
 
         data = json.loads(json_text)
 
+        techniques = data.get("techniques", []) or []
+        summary = data.get("summary") or "Stay mindful and consistent!"
+
+        # --- Uncertainty / confidence handling ----------------------------
+        raw_conf = data.get("confidence", None)
+        try:
+            confidence = float(raw_conf) if raw_conf is not None else None
+        except Exception:
+            confidence = None
+
+        # Heuristic fallback if LLM didn't provide confidence
+        if confidence is None:
+            # Simple heuristic: more techniques + mid-range stress → moderate confidence,
+            # very high stress → slightly lower confidence.
+            n = len(techniques)
+            base = 0.6
+            if target_min <= n <= target_max:
+                base += 0.1
+            if stress_level >= 8:
+                base -= 0.1
+            elif 3 <= stress_level <= 6:
+                base += 0.05
+            confidence = max(0.0, min(1.0, base))
+
+        confidence_note = (data.get("confidence_note") or "").strip()
+        if not confidence_note:
+            if confidence >= 0.8:
+                confidence_note = (
+                    "High confidence: techniques match your goal, stress level, and autonomy setting."
+                )
+            elif confidence >= 0.5:
+                confidence_note = (
+                    "Moderate confidence: techniques are a good fit, but adjust based on what feels right for you."
+                )
+            else:
+                confidence_note = (
+                    "Lower confidence: your inputs are unusual or there is limited context; treat these as gentle suggestions."
+                )
+
+        # --- Explainability / reasoning -----------------------------------
+        explanation = (data.get("explanation") or "").strip()
+        if not explanation:
+            # Fallback explanation if the model didn't send one
+            explanation = (
+                f"These techniques were selected to support your goal "
+                f"('{user_goal}') at a stress level of {stress_level}/10 under "
+                f"**{autonomy_mode}**. The mentor balances grounding practices "
+                f"and gentle activation so they stay feasible during a workday."
+            )
+
         # ✅ Always return a Python dictionary
         return {
-            "techniques": data.get("techniques", []),
-            "summary": data.get("summary", "Stay mindful and consistent!"),
+            "techniques": techniques,
+            "summary": summary,
+            "confidence": confidence,
+            "confidence_note": confidence_note,
+            "explanation": explanation,
         }
 
     except Exception as e:
         print("⚠️ Error in run_mentor_cycle:", e)
+        # Conservative fallback with lower confidence
         return {
             "techniques": [],
             "summary": "I wasn’t able to generate techniques right now. Please try again.",
+            "confidence": 0.3,
+            "confidence_note": "Fallback response due to an error while generating techniques.",
+            "explanation": (
+                "The mentor could not complete its normal reasoning process, so no "
+                "specific techniques are shown. This is a safe fallback to avoid "
+                "guessing when the model is uncertain."
+            ),
         }

@@ -221,6 +221,7 @@ def run_workload_adaptation(
 class CheckInState(TypedDict, total=False):
     checkin: dict
     day_adjustment: dict
+    coach_mode: str
 
 
 def create_checkin_graph():
@@ -231,13 +232,13 @@ def create_checkin_graph():
     return g.compile()
 
 
-def run_morning_checkin(checkin: CheckIn) -> DayAdjustment:
+def run_morning_checkin(checkin: CheckIn, coach_mode: str = "gentle") -> DayAdjustment:
     """
     Run the morning check-in workflow via LangGraph and return a DayAdjustment
     Pydantic model (summary, focus_for_today, risk_flags, etc.).
     """
     compiled = create_checkin_graph()
-    result = compiled.invoke({"checkin": checkin.model_dump()})
+    result = compiled.invoke({"checkin": checkin.model_dump(), "coach_mode": coach_mode,})
     da = result.get("day_adjustment") or {}
     return DayAdjustment(**da)
 

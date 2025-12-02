@@ -963,5 +963,101 @@
     "confidence": 0.78,
     "confidence_note": "These activities directly link mindfulness practices with behavioral changes that can contribute significantly to weight management.",
     "saved_at": 1764600376
+  },
+  {
+    "goal": "reduce daily stress",
+    "suggested_activities": [
+      "Begin each day with a 10-minute guided meditation focusing on breathing and letting go of stress. Use an app like Headspace or Calm.",
+      "Take a 5-minute break every hour to practice the '5-4-3-2-1' grounding technique: identify 5 things you see, 4 things you can touch, 3 things you hear, 2 things you smell, and 1 thing you taste.",
+      "End your workday with a quick body scan meditation (10 minutes) to release tension accumulated during the day and transition into personal time."
+    ],
+    "ai_summary": "This plan combines morning preparation, hourly grounding breaks, and evening relaxation to specifically target daily stress reduction.",
+    "confidence": 0.85,
+    "confidence_note": "The activities are tailored for daily incorporation into a corporate environment to effectively manage stress throughout the day.",
+    "saved_at": 1764630077
+  },
+  {
+    "goal": "manage anxiety",
+    "suggested_activities": [
+      "Participate in a monthly guided visualization session focused on calming anxiety, led by a trained professional. This will help create mental imagery that alleviates stress.",
+      "Engage in a community breathwork workshop where participants learn various breathing techniques specifically designed to reduce anxiety levels in a group setting.",
+      "Complete a monthly mindfulness-based stress reduction (MBSR) online course segment, focusing on specific practices that target anxiety management and emotional regulation."
+    ],
+    "ai_summary": "This plan includes structured activities that are tailored for monthly sessions, allowing you to build coping strategies against anxiety progressively while fostering community support.",
+    "confidence": 0.85,
+    "confidence_note": "The activities are specifically designed for anxiety management and can be effectively practiced monthly to yield long-term benefits.",
+    "saved_at": 1764631117
+  },
+  {
+    "goal": "improve focus",
+    "suggested_activities": [
+      "Start each day with a 10-minute focused breath meditation: Sit in a quiet space, close your eyes, and concentrate solely on your breath. Whenever your mind wanders, gently bring it back to the sensation of breathing.",
+      "Implement the Pomodoro Technique during work hours: Work for 25 minutes focused on one task, then take a 5-minute break to stretch or practice mindful breathing. Repeat this cycle four times before taking a longer break.",
+      "Engage in a 'mindful noticing' exercise: During meetings or while working, periodically pause and observe three things around you\u2014colors, sounds, or sensations\u2014to anchor yourself in the present moment and reduce distractions."
+    ],
+    "ai_summary": "This plan includes specific activities designed to enhance focus through mindfulness techniques that encourage concentration and presence throughout the day.",
+    "confidence": 0.85,
+    "confidence_note": "The activities are tailored for daily practice and directly target improving focus by integrating structured mindfulness techniques.",
+    "saved_at": 1764636632
+  },
+  {
+    "goal": "Reduce daily stress",
+    "suggested_activities": [
+      "Start each morning with a 5-minute guided breathing exercise focused on releasing tension and setting intentions for the day. Use an app like Headspace or Insight Timer.",
+      "Implement a 'mindful break' at midday: step away from your desk, find a quiet space, and practice a body scan meditation for 10 minutes to reconnect with your body and reduce accumulated stress.",
+      "End the workday with a gratitude reflection: jot down three things that went well during the day and how they made you feel. This can help shift focus from stressors to positive experiences."
+    ],
+    "ai_summary": "This plan aims to integrate mindfulness practices into your daily routine, specifically targeting stress reduction through structured morning, midday, and evening activities.",
+    "confidence": 0.85,
+    "confidence_note": "The selected activities are backed by research showing their effectiveness in reducing workplace stress when practiced consistently.",
+    "saved_at": 1764637878
+  },
+  {
+    "goal": "Need a plan to reduce anxiety for 3 weeks",
+    "suggested_activities": [
+      "Weekly guided meditation session focusing on breath awareness and body scan to help ground yourself each week.",
+      "Journaling exercise every Friday where you write down three things that triggered your anxiety during the week, followed by three positive affirmations to counteract those thoughts.",
+      "Attend a weekly group mindfulness class (in-person or virtual) to share experiences and learn new techniques for managing anxiety."
+    ],
+    "ai_summary": "This plan involves structured activities that promote self-awareness and community support, providing tools specifically designed to reduce anxiety over a three-week period.",
+    "confidence": 0.78,
+    "confidence_note": "The activities are tailored to directly address anxiety management while incorporating both personal reflection and social connection.",
+    "saved_at": 1764638987
+  },
+  {
+    "goal": "improve focus",
+    "suggested_activities": [
+      "Mindful Work Blocks: Dedicate 25 minutes to focus solely on a single task, followed by a 5-minute mindfulness meditation break where you observe your breath and sensations in the body.",
+      "Focus Reboot Ritual: Before starting your week, spend 10 minutes journaling your top three priorities. Visualize successfully completing them while practicing deep breathing to anchor your focus.",
+      "Body Scan for Focus: Each week, practice a guided body scan meditation (15-20 minutes) that emphasizes awareness of areas where tension may cause distractions. This can help ground you before or after work sessions."
+    ],
+    "ai_summary": "This plan incorporates structured time management with mindfulness techniques aimed at enhancing focus through intentional breaks and self-awareness practices.",
+    "confidence": 0.76,
+    "confidence_note": "These activities are specifically designed to promote sustained concentration while integrating mindfulness into the workflow.",
+    "saved_at": 1764639063
+  },
+  {
+    "goal": "improve focus",
+    "suggested_activities": [
+      "Mindful Breathing Session: Dedicate 10 minutes every week to practice mindful breathing. Focus on your breath as it enters and leaves your body, counting each breath up to ten and then starting over. This activity will help enhance your concentration skills.",
+      "Single-Tasking Challenge: Choose one task to focus on for a designated time (e.g., 25 minutes using the Pomodoro technique). Set an intention to minimize distractions during this period. Reflect on the experience afterward.",
+      "Focused Attention Meditation: Spend 15 minutes practicing focused attention meditation. Sit comfortably, close your eyes, and choose a single object of focus (like a candle flame or a particular sound) to return your attention to whenever it drifts."
+    ],
+    "ai_summary": "This plan incorporates mindfulness activities specifically designed to enhance focus by training the mind to concentrate better through structured breathing, dedicated task time, and focused attention practices.",
+    "confidence": 0.75,
+    "confidence_note": "These activities are evidence-based techniques known to improve attention and concentration in busy corporate environments.",
+    "saved_at": 1764640780
+  },
+  {
+    "goal": "reduce daily stress",
+    "suggested_activities": [
+      "Morning 5-Minute Breathing Exercise: Spend five minutes upon waking to focus on deep breathing, inhaling for four counts and exhaling for six counts, helping to set a calm tone for the day.",
+      "Midday Nature Break: Step outside for a ten-minute walk in nature or through a nearby park during your lunch break. Focus on the sights, sounds, and smells around you to re-center your mind.",
+      "Evening Reflective Journaling: Dedicate ten minutes before bed to write about three things that went well during the day. This practice helps shift attention from stressors to positive experiences."
+    ],
+    "ai_summary": "This plan includes short, targeted mindfulness activities that fit easily into your daily routine and are designed specifically to reduce stress throughout the day.",
+    "confidence": 0.82,
+    "confidence_note": "The chosen activities are manageable and effective for daily stress reduction, aligning well with common workplace environments.",
+    "saved_at": 1764642402
   }
 ]
